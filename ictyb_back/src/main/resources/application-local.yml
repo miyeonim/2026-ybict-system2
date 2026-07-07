@@ -1,0 +1,32 @@
+# application-local.yml
+spring:
+  # 로컬 마리아디비 데이터베이스 및 JPA 상세 설정
+  datasource:
+    driver-class-name: org.mariadb.jdbc.Driver
+    url: jdbc:mariadb://localhost:3306/ict_yb_db?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+    username: icyybusr
+    password: 1234
+
+  # 🌟 추가할 부분: SQL 스크립트 초기화 설정
+  sql:
+    init:
+      mode: always  # 애플리케이션 시작 시 항상 SQL 실행
+      schema-locations: classpath:schema.sql # 스크립트 파일 위치 지정
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+
+cors:
+  allowed-origins: "http://localhost:8080,http://localhost:5173"
+
+# 🌟 파일 업로드 경로 설정 (spring 블록 외부)
+file:
+  upload-dir: /app/uploads/qna
+  report-daily-upload-dir: /app/uploads/report_daily
+  work-my-upload-dir: /app/uploads/work_my
+  work-opinion-upload-dir: /app/uploads/work_opinion

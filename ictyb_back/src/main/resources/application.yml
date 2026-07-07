@@ -1,0 +1,39 @@
+server:
+  port: 8082 # 포트
+
+spring:
+  application:
+    name: ictyb_back
+    
+  servlet:
+    encoding:
+      charset: UTF-8
+      force: true # 모든 요청과 응답에 UTF-8 인코딩 강제 적용
+    multipart:
+      max-file-size: 20MB   # 첨부파일 1개당 최대 크기 (기본값 1MB는 너무 작아 상향)
+      max-request-size: 50MB # 첨부파일 여러 개를 포함한 요청 전체 최대 크기
+
+  profiles:
+    active: local
+
+  sql:
+    init:
+      encoding: UTF-8
+
+  jpa:
+    properties:
+      hibernate:
+        connection:
+          charSet: UTF-8
+        dialect: org.hibernate.dialect.MariaDBDialect
+
+# 스웨거(Swagger) 공통 설정
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+
+# jwt설정
+jwt:
+  secret: aGVsbG9rZXBjb2ljaHR5YnNlY3JldGtleXRoYXRpczMyY2hhcmFjdGVycw==

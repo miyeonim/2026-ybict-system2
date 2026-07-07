@@ -1,0 +1,23 @@
+spring:
+  datasource:
+    driver-class-name: org.mariadb.jdbc.Driver
+    url: jdbc:mariadb://mariadb:3306/ict_yb_db?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+    username: icyybusr
+    # 🌟 [수정] 도커가 넘겨주는 환경변수를 호출하되, 없을 경우 우측의 '1234'를 기본값으로 씁니다!
+    password: ${SPRING_DATASOURCE_PASSWORD:1234}
+  
+  jpa:
+    hibernate:
+      ddl-auto: validate # 🚨 함부로 테이블 구조가 바뀌지 않도록 검증만 합니다.
+    show-sql: true
+
+# @Value("${cors.allowed-origins}") 자바 코드가 완벽하게 인식
+cors:
+  allowed-origins: "http://localhost:8080,http://localhost:5173"
+
+# 🌟 파일 업로드 경로 설정 (spring 블록 외부)
+file:
+  upload-dir: ./uploads/qna
+  report-daily-upload-dir: ./uploads/report_daily
+  work-my-upload-dir: ./uploads/work_my
+  work-opinion-upload-dir: ./uploads/work_opinion
