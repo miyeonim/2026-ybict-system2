@@ -75,8 +75,6 @@ https://nodejs.org/dist/v24.2.0/node-v24.2.0-linux-x64.tar.xz  ← Linux용
 
 
 2. 개발 환경 준비 사항
-'''
-
 Phase 1. Mac에서 준비 (지금, 인터넷 됨)
 
 cd ictyb_front
