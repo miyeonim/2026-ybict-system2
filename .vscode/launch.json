@@ -1,0 +1,14 @@
+{
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Spring Boot-IctybBackApplication<ictyb_back>",
+            "request": "launch",
+            "cwd": "${workspaceFolder}",
+            "mainClass": "kepco.prorject.ictyb.back.ictyb_back.IctybBackApplication",
+            "projectName": "ictyb_back",
+            "args": "",
+            "envFile": "${workspaceFolder}/.env"
+        }
+    ]
+}

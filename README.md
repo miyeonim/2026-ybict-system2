@@ -116,7 +116,24 @@ FLUSH PRIVILEGES;
 
 ---
 
-## 📌 3. 폐쇄망 프론트엔드 환경 구성
+## 📌 3. 폐쇄망 Back 엔드 환경 구성
+
+> 목표: back엔드 관련 환경 구성 
+```bash
+# 0) 개발 도구 옮기기 : vscode or STS 
+
+# 1) 자바 버전 : 17
+https://adoptium.net/temurin/releases/?version=17
+
+# 2) Mac에서 오프라인 Maven 캐시 만들기 
+```bash
+```
+```
+
+### 3-1. Node.js 준비
+
+
+## 📌 4. 폐쇄망 프론트엔드 환경 구성
 
 > 목표: **Mac(인터넷 O) → Windows(폐쇄망 개발) → Linux/Unix(운영 서버)** 순으로 이관하며, node_modules는 직접 복사하지 않고 npm 오프라인 캐시를 이관하는 방식.
 
