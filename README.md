@@ -78,20 +78,20 @@ https://nodejs.org/dist/v24.2.0/node-v24.2.0-linux-x64.tar.xz  ← Linux용
 Phase 1. Mac에서 준비 (지금, 인터넷 됨)
 
 cd ictyb_front
-# 1. 일반 설치 (정상 동작 확인용)
+1. 일반 설치 (정상 동작 확인용)
 npm install
 npm run dev   # localhost:5173 등에서 뜨는지 확인
 
-# 2. 오프라인 캐시 생성 (Mac용 바이너리 포함)
+2. 오프라인 캐시 생성 (Mac용 바이너리 포함)
 npm install --cache ./offline-cache
 
-# 3. Windows(win32/x64)용 바이너리 강제로 캐시에 추가
+3. Windows(win32/x64)용 바이너리 강제로 캐시에 추가
 npm install --cache ./offline-cache --os=win32 --cpu=x64 --force
 
-# 4. Linux(x64)용도 미리 추가 (나중에 서버에서 필요할 수도 있으니)
+4. Linux(x64)용도 미리 추가 (나중에 서버에서 필요할 수도 있으니)
 npm install --cache ./offline-cache --os=linux --cpu=x64 --force
 
-# 4. 이관용 압축
+4. 이관용 압축
 cd ..
 zip -r ictyb_front_transfer.zip \
   ictyb_front -x "ictyb_front/node_modules/*" \
@@ -99,20 +99,20 @@ zip -r ictyb_front_transfer.zip \
   node-v24.2.0-linux-x64.tar.xz
 
 
-# 5. Phase 3. Windows(폐쇄망)에서 개발
-# 1. Node.js 설치 (node-v24.2.0-x64.msi 실행)
+5. Phase 3. Windows(폐쇄망)에서 개발
+1. Node.js 설치 (node-v24.2.0-x64.msi 실행)
 node -v   # v24.2.0 정확히 나오는지 확인
 
-# 2. zip 해제 후 폴더 진입
+2. zip 해제 후 폴더 진입
 cd ictyb_front
 
-# 3. npm 캐시를 이관받은 offline-cache로 지정
+3. npm 캐시를 이관받은 offline-cache로 지정
 npm config set cache .\offline-cache
 
-# 4. 오프라인 설치 (네트워크 전혀 안 씀)
+4. 오프라인 설치 (네트워크 전혀 안 씀)
 npm install --offline
 
-# 5. 개발 서버 실행
+5. 개발 서버 실행
 npm run dev
 
 
