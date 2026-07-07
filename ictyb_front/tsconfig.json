@@ -1,0 +1,33 @@
+{
+  "include": [
+    "**/*",
+    "**/.server/**/*",
+    "**/.client/**/*",
+    ".react-router/types/**/*"
+  ],
+  "compilerOptions": {
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "types": ["node", "vite/client"],
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "rootDirs": [".", "./.react-router/types"],
+    //"paths": {
+    //  "~/*": ["./app/*"]
+    //},
+    "paths": {
+      "~/*": ["./app/*"],             // 기존 설정 유지
+      "@/*": ["./app/*"],             //@/components/ui/...
+      "@hooks/*": ["./app/hooks/*"],  // 🌟 훅 경로 추가
+      "@routes/*": ["./app/routes/*"] // 🌟 라우트 경로 추가
+    },
+
+    "esModuleInterop": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true,
+    "strict": true
+  }
+}
