@@ -124,10 +124,11 @@ FLUSH PRIVILEGES;
 
 # 1) 자바 버전 : 17
 https://adoptium.net/temurin/releases/?version=17
+```
 
 # 2) Mac에서 오프라인 Maven 캐시 만들기 
 ```bash
-```
+
 ```
 
 ### 3-1. Node.js 준비
