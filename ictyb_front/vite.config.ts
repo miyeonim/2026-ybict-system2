@@ -7,4 +7,8 @@ export default defineConfig({
   resolve: {
     tsconfigPaths: true,
   },
+  server: {
+    port: 9000,
+    host: "0.0.0.0",   // 외부 IP(100.1.221.29)에서 접속하려면 필수
+  },
 });
