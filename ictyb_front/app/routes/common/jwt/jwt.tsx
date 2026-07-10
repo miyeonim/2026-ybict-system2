@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useNavigate } from "react-router";
 import { useAuth } from "@hooks/common/jwt/useAuthController";
 import { Button } from "@/components/ui/button";
@@ -24,14 +24,30 @@ const PALETTE = {
 };
 
 export default function JwtLogin() {
+
+  // 0. SSO 체크 상태
+  const [checkingSso, setCheckingSso] = useState(true);
+
   //1. 로그인 관련 정보
   const [userEmpno, setUserEmpno] = useState("");
   const [password, setPassword] = useState("");
-  const { login, loading } = useAuth();
+  const { login, loading , ssoLogin} = useAuth();
 
   // 2. 팝업 상태와 메시지 상태 추가
   const [errorOpen, setErrorOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const result = await ssoLogin();
+      if (!result.success) {
+        setCheckingSso(false); // SSO 없거나 실패 → 로그인 폼 노출
+      }
+      // 성공 시 ssoLogin 내부에서 이미 navigate 처리됨
+    })();
+  }, []);
+
+
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -44,6 +60,16 @@ export default function JwtLogin() {
       setErrorOpen(true);
     }
   };
+
+
+  // 🌟 SSO 확인 중에는 로딩 화면만 표시
+  if (checkingSso) {
+    return (
+      <div className="flex justify-center items-center min-h-screen" style={{ backgroundColor: PALETTE.pageBg }}>
+        <div style={{ color: PALETTE.accent }}>SSO 확인 중...</div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex justify-center items-center min-h-screen" style={{ backgroundColor: PALETTE.pageBg }}>

@@ -2,7 +2,7 @@ import axios, { type AxiosResponse } from 'axios';
 import type { BaseResponse } from '@hooks/common/base'; // 하이니스님의 실제 base 경로에 맞게 지정하소서.
 
 const clientService = axios.create({
-  baseURL: 'http://localhost:8082',
+  baseURL: import.meta.env.VITE_API_BASE_URL,
   timeout: 10000,
   headers: {
     'Content-Type': 'application/json',

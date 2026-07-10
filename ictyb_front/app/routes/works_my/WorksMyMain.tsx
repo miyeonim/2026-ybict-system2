@@ -122,13 +122,13 @@ const CountBadge: React.FC<{ count: number; active: boolean }> = ({
   </span>
 );
 
-const formatDate = (dt: string) => {
+const formatDate = (dt: string | null) => {
   if (!dt || dt.length < 8) return dt;
   return `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)}`;
 };
 
 // yyyyMMddHHmmss -> yyyy-MM-dd HH:mm:ss (결재이력 표시용, 시분초까지)
-const formatDateTime = (dt: string) => {
+const formatDateTime = (dt: string | null) => {
   if (!dt || dt.length < 14) return formatDate(dt);
   return `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)} ${dt.slice(8, 10)}:${dt.slice(10, 12)}:${dt.slice(12, 14)}`;
 };
@@ -182,13 +182,22 @@ const ApprovalHistoryDialog: React.FC<{
                   className={
                     h.signLabel === "반려"
                       ? "text-red-500 font-medium ml-1"
+                      : h.signLabel === "결재대기"
+                      ? "text-amber-500 font-medium ml-1"
                       : "text-emerald-600 font-medium ml-1"
                   }
                 >
                   {h.signLabel}
                 </span>
               </div>
-              <div className="text-xs text-slate-400 mt-0.5">{formatDateTime(h.regDt)}</div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                {h.regDt ? formatDateTime(h.regDt) : "결재 대기 중"}
+              </div>
+              {h.signLabel === "반려" && h.reason && (
+                <div className="text-xs text-red-500 mt-1 bg-red-50 border border-red-100 rounded px-2 py-1">
+                  반송사유: {h.reason}
+                </div>
+              )}
             </div>
           </div>
         ))}
@@ -403,11 +412,19 @@ const formatDateYmd = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 
 // 처리기간(일)을 오늘 기준으로 더해 완료예정일(yyyy-MM-dd)을 계산
+// 처리기간은 평일(월~금) 기준이므로 토/일요일은 카운트에서 제외한다
 const calcExpectedFinishedDt = (periodDays: string): string | null => {
   const n = Number(periodDays);
   if (!periodDays.trim() || !Number.isFinite(n) || n < 0) return null;
   const d = new Date();
-  d.setDate(d.getDate() + n);
+  let remaining = n;
+  while (remaining > 0) {
+    d.setDate(d.getDate() + 1);
+    const day = d.getDay();
+    if (day !== 0 && day !== 6) {
+      remaining--;
+    }
+  }
   return formatDateYmd(d);
 };
 
@@ -420,7 +437,6 @@ const EMPTY_CREATE_FORM: WorksMyCreateRequest = {
   workLevel: "",
   workPeriod: "",
   expectedFinishedDt: "",
-  targetDepCd: "",
   initialApproverSabun: "",
   initialApproverName: "",
 };
@@ -472,8 +488,7 @@ const CreateWorkOrderDialog: React.FC<{
   };
 
   const handleSubmit = async () => {
-    if (!form.changeTitle.trim() || !form.targetDepCd || !form.initialApproverSabun)
-      return;
+    if (!form.changeTitle.trim() || !form.initialApproverSabun) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -547,8 +562,6 @@ const CreateWorkOrderDialog: React.FC<{
                 className="min-h-60"
               />
             </div>
-
-            {codeSelect("대상 부서 (이 일을 처리할 KDN 부서)", "targetDepCd", options?.departmentOptions)}
 
             <div className="grid grid-cols-2 gap-3">
               {codeSelect("서비스유형", "serviceType", options?.serviceTypeOptions)}
@@ -672,7 +685,6 @@ const CreateWorkOrderDialog: React.FC<{
               submitting ||
               loading ||
               !form.changeTitle.trim() ||
-              !form.targetDepCd ||
               !form.initialApproverSabun
             }
             onClick={handleSubmit}

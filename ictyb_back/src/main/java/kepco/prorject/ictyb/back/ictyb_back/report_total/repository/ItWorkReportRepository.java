@@ -48,11 +48,33 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         WHERE LEFT(r.WORK_START_DT, 4) = :year
     ),
     -- [STEP 2] 선택한 연도(year)에 해당하는 업무 리포트 필터링
+    -- ACT_ID NOT IN ('104','105','106','107') : "108(파트 배정) 단계부터 집계"하기 위한 제외 조건.
+    --   일반 흐름(WORK_TYPE<>02)에서는 104~107이 "아직 KDN 파트/담당자가 배정되지 않은" 구간이라
+    --   통계에서 빼는 게 맞다. (커밋 8437a4d 참고)
+    -- ↳ 단, 자료추출(WORK_TYPE='02')은 108(지시서 배부/파트 배정) 단계를 건너뛴다
+    --   (ApprovalFlow.NEXT_DATA_EXTRACTION: 107 → 109, 108 없음. work_my/service/ApprovalFlow.java 참고).
+    --   부서장(KDN 부장)이 107에서 승인하면 WorkMyServiceImpl.approve()가 그 즉시
+    --   WORKER_SABUN에 다음 담당자(예: 김채윤)를 채워 넣지만, its_it_work_report.ACT_ID 자체는
+    --   그 담당자가 109(결과 보고)를 완료하기 전까지 계속 "107"에 머문다.
+    --   즉 자료추출 건은 "담당자 배정" 시점이 108이 아니라 107 처리 중(WORKER_SABUN 세팅) 이므로,
+    --   위 NOT IN 조건만 쓰면 이미 배정되어 대기 중인 자료추출 건이 담당자가 실제로
+    --   109를 완료할 때까지 통계에서 통째로 빠지는 버그가 있었다.
+    --   → WORK_TYPE='02' AND ACT_ID='107' 이면서 WORKER_SABUN이 이미 채워진 경우는
+    --     "담당자 배정 완료"로 보고 예외적으로 포함시킨다.
     report_with_handler AS (
         SELECT r.INST_ID, r.ACT_ID, r.WORK_START_DT
         FROM its_it_work_report r
         INNER JOIN latest_handler lh ON r.INST_ID = lh.INST_ID
         WHERE LEFT(r.WORK_START_DT, 4) = :year
+          AND (
+              r.ACT_ID NOT IN ('104','105','106','107')
+              OR (
+                  r.WORK_TYPE = '02'
+                  AND r.ACT_ID = '107'
+                  AND r.WORKER_SABUN IS NOT NULL
+                  AND r.WORKER_SABUN <> ''
+              )
+          )
     ),
     -- [STEP 3] 업무별 담당자의 부서(PART_ID)를 매칭하고 최신 파트 우선순위 지정
     report_with_part AS (
@@ -116,6 +138,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         AND DATE(STR_TO_DATE(r.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
         INNER JOIN filtered_parts fp ON ui.PART_ID = fp.PART_ID
         WHERE LEFT(r.WORK_START_DT, 4) IN (:year, :prevYear)
+          AND r.ACT_ID NOT IN ('104','105','106','107')
     ),
     -- 3. 연도/월별 집계
     stats AS (
@@ -182,6 +205,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
             END AS sabun
         FROM its_it_work_report r
         WHERE LEFT(r.WORK_START_DT, 4) = :year
+          AND r.ACT_ID NOT IN ('104','105','106','107')
     ),
     -- [STEP 2] 담당자 사번과 ybict_user_info 매칭: 날짜가 파트 기간 안에 있어야 함
     matched AS (

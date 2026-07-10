@@ -18,6 +18,9 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
      * 담당자 사번 결정 규칙은 work_all.repository.WorkAllRepository.getWorksAllList()와 동일.
      * 완료(ACT_ID='800') 건은 집계 대상에서 제외하고, 완료예정일(EXPECTED_FINISHED_DT)이
      * 오늘보다 이전이면 일정지연, 그 외(미정 포함)는 진행중으로 분류한다.
+     * 파트장(PARTLEADER_YN='Y')과 부서장(BUJAN_YN='Y')은 자동 집계 대상에서 제외한다.
+     * ybict_user_info를 기준으로 LEFT JOIN하므로, 배정된 작업지시서가 하나도 없는
+     * 대리급 인원도 0건으로 목록에 포함된다.
      */
     @Query(value = """
         WITH
@@ -49,24 +52,30 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         ),
         matched AS (
             SELECT
+                rv.INST_ID,
                 rv.EXPECTED_FINISHED_DT,
                 ui.EMPNO AS sabun,
                 COALESCE(rv.WORKER_NAME, ui.USER_NM) AS person_name
-            FROM resolved rv
-            INNER JOIN ybict_user_info ui
+            FROM ybict_user_info ui
+            LEFT JOIN resolved rv
                 ON ui.EMPNO = rv.sabun
                AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
             WHERE ui.PART_ID = :partId
+              AND ui.USE_YN = 'Y'
+              AND COALESCE(ui.PARTLEADER_YN, 'N') <> 'Y'
+              AND COALESCE(ui.BUJAN_YN, 'N') <> 'Y'
         )
         SELECT
             sabun,
             person_name,
             SUM(CASE
-                WHEN EXPECTED_FINISHED_DT IS NULL OR EXPECTED_FINISHED_DT = ''
-                     OR DATE(STR_TO_DATE(EXPECTED_FINISHED_DT, '%Y%m%d%H%i%s')) >= CURDATE()
+                WHEN INST_ID IS NOT NULL
+                     AND (EXPECTED_FINISHED_DT IS NULL OR EXPECTED_FINISHED_DT = ''
+                          OR DATE(STR_TO_DATE(EXPECTED_FINISHED_DT, '%Y%m%d%H%i%s')) >= CURDATE())
                 THEN 1 ELSE 0 END) AS in_progress_cnt,
             SUM(CASE
-                WHEN EXPECTED_FINISHED_DT IS NOT NULL AND EXPECTED_FINISHED_DT <> ''
+                WHEN INST_ID IS NOT NULL
+                     AND EXPECTED_FINISHED_DT IS NOT NULL AND EXPECTED_FINISHED_DT <> ''
                      AND DATE(STR_TO_DATE(EXPECTED_FINISHED_DT, '%Y%m%d%H%i%s')) < CURDATE()
                 THEN 1 ELSE 0 END) AS delayed_cnt
         FROM matched

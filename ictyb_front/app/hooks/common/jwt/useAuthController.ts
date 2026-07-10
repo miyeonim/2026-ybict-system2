@@ -4,13 +4,46 @@ import { useAuthContext } from "@routes/common/jwt/AuthContext"
 import type { LoginResponse } from "@hooks/common/jwt/useauthDto"
 
 
-const API_BASE = "http://localhost:8082";
+const API_BASE = import.meta.env.VITE_API_BASE_URL;
 
 export function useAuth() {
   const [loading, setLoading] = useState<boolean>(false);
   const { setUser } = useAuthContext();
   const navigate = useNavigate();
   const location = useLocation();
+
+  //sso 자동 로그인 구현 
+  const ssoLogin = async (): Promise<LoginResponse> => {
+    try {
+      const response = await fetch(`${API_BASE}/api/auth/v1.0/sso-login`, {
+        method: "POST",
+        credentials: "include", // SSO 쿠키를 백엔드로 실어 보내기 위해 필수
+      });
+
+      if (!response.ok) {
+        return { success: false, accessToken: null, refreshToken: null, message: "SSO 확인 실패", user: null };
+      }
+
+      const result: LoginResponse = await response.json();
+
+      if (result.success && result.user) {
+        if (result.refreshToken) {
+          localStorage.setItem("refreshToken", result.refreshToken);
+        }
+        setUser(result.user);
+
+        const from =
+          (location.state as { from?: { pathname: string } })?.from?.pathname || "/report_total";
+        navigate(from, { replace: true });
+      }
+
+      return result;
+    } catch (err) {
+      console.error("SSO 로그인 확인 중 오류:", err);
+      return { success: false, accessToken: null, refreshToken: null, message: "SSO 연결 실패", user: null };
+    }
+  };
+
 
   const login = async (
     userEmpno: string,
@@ -96,5 +129,5 @@ const logout = async () => {
   localStorage.removeItem("refreshToken");
 };
 
-  return { login, logout, loading };
+  return { ssoLogin, login, logout, loading };
 }

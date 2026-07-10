@@ -30,6 +30,25 @@ public interface UserInfoRepository extends JpaRepository<UserInfoVo, UserInfoPk
         """, nativeQuery = true)
     List<UserInfoVo> findDeptHeadsByDepId(@Param("depId") String depId);
 
+    /**
+     * 여러 부서의 부장(BUJAN_YN='Y') 후보를 한 번에 조회한다 (지시서 접수(107) 단계 -
+     * 대상 부서가 아직 정해지지 않은 시점에 영업/배전/기술 전체 부장 중에서 고르기 위함).
+     */
+    @Query(value = """
+        SELECT ui.* FROM ybict_user_info ui
+        JOIN ybict_part_info pi ON pi.PART_ID = ui.PART_ID AND pi.USE_YN = 'Y'
+        WHERE pi.DEP_ID IN (:depIds) AND ui.USE_YN = 'Y' AND ui.BUJAN_YN = 'Y'
+        """, nativeQuery = true)
+    List<UserInfoVo> findDeptHeadsByDepIds(@Param("depIds") List<String> depIds);
+
+    /** 사번으로 소속 부서(DEP_ID)를 조회한다 (107 승인 시 선택된 부장의 부서를 WORKER_DEP_CD로 확정하기 위함) */
+    @Query(value = """
+        SELECT pi.DEP_ID FROM ybict_user_info ui
+        JOIN ybict_part_info pi ON pi.PART_ID = ui.PART_ID AND pi.USE_YN = 'Y'
+        WHERE ui.EMPNO = :empno AND ui.USE_YN = 'Y'
+        """, nativeQuery = true)
+    List<String> findDepIdByEmpno(@Param("empno") String empno);
+
     /** 파트장(PARTLEADER_YN='Y') 후보 조회 (작업결과 승인 단계) */
     @Query(value = """
         SELECT ui.* FROM ybict_user_info ui

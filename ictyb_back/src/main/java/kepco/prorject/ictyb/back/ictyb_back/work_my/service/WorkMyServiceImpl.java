@@ -20,7 +20,7 @@ import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.ItWorkReportAttac
 import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.ItWorkReportRepository;
 import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.NSignRepository;
 import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.ReceiveRepository;
-import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.TempKepcoUserRepository;
+import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.KepcoUserRepository;
 import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.UserInfoRepository;
 import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.WorkHistoryRepository;
 import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.WorkOpinionReqRepository;
@@ -66,7 +66,7 @@ public class WorkMyServiceImpl implements WorkMyService {
     private final WorkOpinionRepository workOpinionRepository;
     private final WorkOpinionReqRepository workOpinionReqRepository;
     private final IctybWorkNegotiationRepository ictybWorkNegotiationRepository;
-    private final TempKepcoUserRepository tempKepcoUserRepository;
+    private final KepcoUserRepository kepcoUserRepository;
     private final UserInfoRepository userInfoRepository;
     private final KdnDepRepository kdnDepRepository;
     private final ItWorkReportAttachRepository itWorkReportAttachRepository;
@@ -76,7 +76,7 @@ public class WorkMyServiceImpl implements WorkMyService {
     @Value("${file.work-my-upload-dir:./uploads/work_my}")
     private String uploadDir;
 
-    /** temp_kepco_user 로그인 지원을 위해 its_kdn_dep에 함께 등록해둔 한전 부서코드 (실제 KDN 작업부서 아님). */
+    /** ictyb_kepco_user 로그인 지원을 위해 its_kdn_dep에 함께 등록해둔 한전 부서코드 (실제 KDN 작업부서 아님). */
     private static final String KEPCO_DUMMY_DEP_ID = "KP_YBDS";
 
     @Override
@@ -136,6 +136,11 @@ public class WorkMyServiceImpl implements WorkMyService {
                                 LinkedHashMap::new,
                                 Collectors.mapping(this::toApprovalHistoryItem, Collectors.toList())));
 
+        // 아직 결재하지 않은 현재결재자도 결재이력 맨 끝에 붙여, 누구한테 결재가 가 있어 멈춰있는지 보이게 한다.
+        nSignRepository.findByInstIdIn(instIds).forEach(sign ->
+                historyByInstId.computeIfAbsent(sign.getInstId(), k -> new ArrayList<>())
+                        .add(toPendingApprovalHistoryItem(sign)));
+
         List<Object[]> rows = itWorkReportRepository.getWorksMyListByInstIds(instIds);
 
         return rows.stream().map(row -> {
@@ -169,16 +174,29 @@ public class WorkMyServiceImpl implements WorkMyService {
                 .actIdNm(h.getActIdNm())
                 .signLabel("R".equals(h.getActSign()) ? "반려" : "승인")
                 .regDt(h.getRegDt())
+                .reason("R".equals(h.getActSign()) ? h.getRegCntnt() : null)
+                .build();
+    }
+
+    /** 아직 결재하지 않은, 현재 결재가 대기 중인 사람을 결재이력 맨 끝에 표시하기 위한 항목 (처리 시각 없음). */
+    private WorkMyDto.ApprovalHistoryItem toPendingApprovalHistoryItem(NSignVo sign) {
+        return WorkMyDto.ApprovalHistoryItem.builder()
+                .sabun(sign.getSabun())
+                .name(sign.getName())
+                .actIdNm(ApprovalFlow.ACT_ID_NM.get(sign.getActId()))
+                .signLabel("결재대기")
+                .regDt(null)
                 .build();
     }
 
     @Override
     public WorkMyDto.NextCandidatesResponse getNextCandidates(String instId, String sabun) {
         NSignVo current = requireCurrentApprover(instId, sabun);
-        String nextActId = ApprovalFlow.NEXT.get(current.getActId());
+        ItWorkReportVo report = requireReport(instId);
+        String nextActId = ApprovalFlow.next(current.getActId(), report.getWorkType());
         List<WorkMyDto.Candidate> candidates = (nextActId == null || "800".equals(nextActId))
                 ? List.of()
-                : resolveCandidates(nextActId, requireReport(instId));
+                : resolveCandidates(nextActId, report, current);
         return WorkMyDto.NextCandidatesResponse.builder()
                 .currentActId(current.getActId())
                 .candidates(candidates)
@@ -191,7 +209,8 @@ public class WorkMyServiceImpl implements WorkMyService {
                          String workResult, List<MultipartFile> files) throws IOException {
         NSignVo current = requireCurrentApprover(instId, sabun);
         String currentActId = current.getActId();
-        String nextActId = ApprovalFlow.NEXT.get(currentActId);
+        ItWorkReportVo report = requireReport(instId);
+        String nextActId = ApprovalFlow.next(currentActId, report.getWorkType());
         if (nextActId == null) {
             throw new IllegalStateException("이미 완료된 건이거나 알 수 없는 진행단계입니다.");
         }
@@ -199,7 +218,6 @@ public class WorkMyServiceImpl implements WorkMyService {
             throw new IllegalStateException("조치사항을 입력해야 합니다.");
         }
 
-        ItWorkReportVo report = requireReport(instId);
         String now = LocalDateTime.now().format(DT_FMT);
 
         appendHistory(instId, currentActId, ApprovalFlow.ACT_ID_NM.get(currentActId), "S", sabun, sabunName, now, null);
@@ -231,7 +249,15 @@ public class WorkMyServiceImpl implements WorkMyService {
                     .actId(nextActId)
                     .name(nextName)
                     .build());
-            // 지시서 배부(108) 승인 시, 지정된 담당자를 다음 단계(작업결과 보고)의 작업자로 반영한다.
+            // 다음 단계가 지시서 접수(107)로 넘어갈 때, 등록 시엔 미정이던 대상 부서(WORKER_DEP_CD)를
+            // 방금 선택된 부장의 소속 부서로 확정한다.
+            if ("107".equals(nextActId)) {
+                String depId = userInfoRepository.findDepIdByEmpno(nextSabun).stream().findFirst()
+                        .orElseThrow(() -> new IllegalStateException("선택한 결재자의 소속 부서를 찾을 수 없습니다."));
+                report.setWorkerDepCd(depId);
+            }
+            // 다음 단계가 결과 보고(109)로 넘어갈 때, 지정된 담당자를 작업자로 반영한다.
+            // (일반 건은 지시서 배부(108)에서, 자료추출 건은 지시서 접수(107)에서 바로 넘어옴)
             if ("109".equals(nextActId)) {
                 report.setWorkerSabun(nextSabun);
                 report.setWorkerName(nextName);
@@ -245,7 +271,8 @@ public class WorkMyServiceImpl implements WorkMyService {
     public void returnToPrevious(String instId, String sabun, String sabunName, String reason) {
         NSignVo current = requireCurrentApprover(instId, sabun);
         String currentActId = current.getActId();
-        String targetActId = ApprovalFlow.PREV.get(currentActId);
+        ItWorkReportVo report = requireReport(instId);
+        String targetActId = ApprovalFlow.prev(currentActId, report.getWorkType());
         if (targetActId == null) {
             throw new IllegalStateException("반송할 이전 단계가 없습니다.");
         }
@@ -259,7 +286,6 @@ public class WorkMyServiceImpl implements WorkMyService {
                 .reduce((first, second) -> second) // 가장 최근(마지막) 처리자
                 .orElseThrow(() -> new IllegalStateException("이전 단계 처리자를 찾을 수 없습니다."));
 
-        ItWorkReportVo report = requireReport(instId);
         String now = LocalDateTime.now().format(DT_FMT);
 
         appendHistory(instId, currentActId, ApprovalFlow.ACT_ID_NM.get(currentActId), "R", sabun, sabunName, now, reason);
@@ -271,32 +297,45 @@ public class WorkMyServiceImpl implements WorkMyService {
                 .name(targetHistory.getRegName())
                 .build());
 
-        report.setActId(ApprovalFlow.revertReportActId(targetActId));
+        report.setActId(ApprovalFlow.revertReportActId(targetActId, report.getWorkType()));
+        // 109(결과 보고) 담당자가 반려하면 그 배정 자체를 되돌리는 것이므로 WORKER_SABUN/NAME도 함께 지운다.
+        // 지우지 않으면, 이후 상위 결재자(부장/파트장)가 재승인할 때 resolveCandidates()의
+        // resolvePartId()가 "이미 배정된 작업자가 있다"고 오판해 이전 담당자의 파트로만
+        // 다음 담당자 후보를 좁혀버리는 버그가 있었다(2026-07-08, 자료추출 건에서 재현).
+        if ("109".equals(currentActId)) {
+            report.setWorkerSabun(null);
+            report.setWorkerName(null);
+        }
         itWorkReportRepository.save(report);
     }
 
     @Override
     public WorkMyDto.CreateOptions getCreateOptions() {
-        List<WorkMyDto.CodeOption> departmentOptions = kdnDepRepository.findAll().stream()
-                .filter(d -> !KEPCO_DUMMY_DEP_ID.equals(d.getDepId()))
-                .map(d -> WorkMyDto.CodeOption.of(d.getDepId(), d.getDepTitle()))
-                .collect(Collectors.toList());
-
         return WorkMyDto.CreateOptions.builder()
                 .serviceTypeOptions(WorkOrderCodeOptions.SERVICE_TYPE)
                 .workTypeOptions(WorkOrderCodeOptions.WORK_TYPE)
                 .workGubunOptions(WorkOrderCodeOptions.WORK_GUBUN)
                 .workLevelOptions(WorkOrderCodeOptions.WORK_LEVEL)
-                .departmentOptions(departmentOptions)
                 .build();
+    }
+
+    /**
+     * 대상 부서 후보 3곳(영업/배전/기술)의 DEP_ID 목록.
+     * 영배사업처(처 레벨)와 한전 더미 부서는 제외한다 - 등록 시 targetDepCd 선택란이 있던 시절
+     * getCreateOptions()의 departmentOptions 필터와 동일한 기준이며, 이제는 지시서 접수(107)
+     * 단계에서 부장 후보를 좁히는 데 쓰인다.
+     */
+    private List<String> businessDepIds() {
+        return kdnDepRepository.findAll().stream()
+                .filter(d -> !KEPCO_DUMMY_DEP_ID.equals(d.getDepId()))
+                .filter(d -> d.getParDepId() != null)
+                .map(KdnDepVo::getDepId)
+                .collect(Collectors.toList());
     }
 
     @Override
     public List<WorkMyDto.Candidate> getInitialApproverCandidates() {
-        // 실제 한전 인사정보 테이블엔 직책(파트장/직원) 구분 필드가 없어, 역할 구분 없이 전원을 후보로 보여준다.
-        return tempKepcoUserRepository.findAll().stream()
-                .map(u -> toCandidate(u.getSabun(), u.getName(), "한전 담당자"))
-                .collect(Collectors.toList());
+        return kepcoStaffCandidates();
     }
 
     @Override
@@ -308,9 +347,6 @@ public class WorkMyServiceImpl implements WorkMyService {
         }
         if (request.getInitialApproverSabun() == null || request.getInitialApproverSabun().isBlank()) {
             throw new IllegalStateException("최초 결재자를 지정해야 합니다.");
-        }
-        if (request.getTargetDepCd() == null || request.getTargetDepCd().isBlank()) {
-            throw new IllegalStateException("이 일을 처리할 부서(대상 부서)를 지정해야 합니다.");
         }
 
         String now = LocalDateTime.now().format(DT_FMT);
@@ -331,12 +367,14 @@ public class WorkMyServiceImpl implements WorkMyService {
                 .expectedFinishedDt(expectedFinishedDt)
                 .actId("104")
                 // 등록자 자신의 소속(한전일 수도 있음)과, 이 일을 실제로 처리할 KDN 부서(WORKER_DEP_CD)는 별개다.
+                // WORKER_DEP_CD는 등록 시점엔 아직 정해지지 않고, 106(한전 파트장 승인) 통과 후
+                // 107 단계에서 대상 부서 부장이 선택되는 순간 확정된다.
                 .regUserSabun(creatorSabun)
                 .regUserName(creatorName)
                 .regUserDepCd(creatorDepCd)
                 .regUserDepNm(creatorDepNm)
-                .workerDepCd(request.getTargetDepCd())
                 .regDt(now)
+                .workStartDt(now)
                 .build();
         itWorkReportRepository.save(report);
 
@@ -371,6 +409,14 @@ public class WorkMyServiceImpl implements WorkMyService {
         String currentActId = currentSign.map(NSignVo::getActId).orElse(null);
         boolean myTurn = currentSign.map(NSignVo::getSabun).map(s -> s.equals(sabun)).orElse(false);
 
+        List<WorkMyDto.ApprovalHistoryItem> approvalHistory = new ArrayList<>(
+                workHistoryRepository.findByInstIdOrderBySeqAsc(instId)
+                        .stream()
+                        .map(this::toApprovalHistoryItem)
+                        .collect(Collectors.toList()));
+        // 아직 결재하지 않은 현재결재자도 결재이력 맨 끝에 붙여, 누구한테 결재가 가 있어 멈춰있는지 보이게 한다.
+        currentSign.ifPresent(sign -> approvalHistory.add(toPendingApprovalHistoryItem(sign)));
+
         List<WorkMyDto.AttachmentItem> workResultAttachments = workResultAttachRepository.findByInstId(instId).stream()
                 .map(a -> WorkMyDto.AttachmentItem.builder()
                         .seq(a.getSeq())
@@ -404,6 +450,7 @@ public class WorkMyServiceImpl implements WorkMyService {
                 .currentActId(currentActId)
                 .myTurn(myTurn)
                 .workResult(workResultItem)
+                .approvalHistory(approvalHistory)
                 .build();
     }
 
@@ -493,6 +540,13 @@ public class WorkMyServiceImpl implements WorkMyService {
         return kdnDepRepository.findByDepId(depCd).map(KdnDepVo::getDepTitle).orElse(depCd);
     }
 
+    /** 사번의 소속 부서명 (107 결재자 후보 목록에서 부서별로 구분해 보여주기 위함) */
+    private String deptNmOf(String empno) {
+        return userInfoRepository.findDepIdByEmpno(empno).stream().findFirst()
+                .map(this::resolveDepNm)
+                .orElse("소속 부서 미상");
+    }
+
     private void saveAttachments(String instId, String now, List<MultipartFile> files) throws IOException {
         if (files == null || files.isEmpty()) return;
 
@@ -562,33 +616,42 @@ public class WorkMyServiceImpl implements WorkMyService {
         workHistoryRepository.save(history);
     }
 
-    private List<WorkMyDto.Candidate> resolveCandidates(String nextActId, ItWorkReportVo report) {
+    private List<WorkMyDto.Candidate> resolveCandidates(String nextActId, ItWorkReportVo report, NSignVo current) {
         // 이 일을 처리할 KDN 부서는 REG_USER_DEP_CD(등록자 자신의 소속 - 한전일 수도 있음)가 아니라
         // WORKER_DEP_CD(작업부서, 등록 시 지정)를 기준으로 판단한다.
         String depId = report.getWorkerDepCd();
-        String partId = resolvePartId(report);
+        String partId = resolvePartId(report, current);
 
         return switch (nextActId) {
-            // 실제 한전 인사정보 테이블엔 직책(파트장/직원) 구분 필드가 없어, 역할 구분 없이 전원을 후보로 보여준다.
-            case "106" -> tempKepcoUserRepository.findAll().stream()
-                    .map(u -> toCandidate(u.getSabun(), u.getName(), "한전 담당자"))
+            case "106" -> kepcoStaffCandidates();
+            // 107 시점엔 아직 대상 부서(WORKER_DEP_CD)가 정해지지 않았으므로 영업/배전/기술
+            // 3개 부서 부장 전체를 후보로 보여준다. 여기서 선택된 부장의 소속 부서가 곧
+            // 이 지시서의 대상 부서로 확정된다(approve()에서 WORKER_DEP_CD를 세팅).
+            // 후보가 여러 부서에 걸쳐 있으므로 roleNm에 소속 부서명을 같이 표시해 구분한다.
+            case "107" -> userInfoRepository.findDeptHeadsByDepIds(businessDepIds()).stream()
+                    .map(u -> toCandidate(u.getEmpno(), u.getUserNm(), "KDN 부장 (" + deptNmOf(u.getEmpno()) + ")"))
                     .collect(Collectors.toList());
-            case "108" -> userInfoRepository.findDeptHeadsByDepId(depId).stream()
-                    .map(u -> toCandidate(u.getEmpno(), u.getUserNm(), "KDN 부장"))
+            // 108 시점엔 아직 작업자(partId)가 정해지지 않아 부서 전체 파트장 중에서 고른다.
+            // 후보가 여러 파트에 걸쳐 있으므로 roleNm에 담당 파트명을 같이 표시해 구분한다.
+            case "108" -> (partId != null
+                    ? userInfoRepository.findPartLeadersByPartId(partId)
+                    : userInfoRepository.findPartLeadersByDepId(depId)).stream()
+                    .map(u -> toCandidate(u.getEmpno(), u.getUserNm(), "KDN 파트장 (" + u.getPartNm() + ")"))
                     .collect(Collectors.toList());
             case "109" -> (partId != null
                     ? userInfoRepository.findRegularMembersByPartId(partId)
                     : userInfoRepository.findRegularMembersByDepId(depId)).stream()
-                    .map(u -> toCandidate(u.getEmpno(), u.getUserNm(), "KDN 직원"))
+                    .map(u -> toCandidate(u.getEmpno(), u.getUserNm(), "KDN 대리"))
                     .collect(Collectors.toList());
-            case "111" -> (partId != null
+            case "110" -> (partId != null
                     ? userInfoRepository.findPartLeadersByPartId(partId)
                     : userInfoRepository.findPartLeadersByDepId(depId)).stream()
                     .map(u -> toCandidate(u.getEmpno(), u.getUserNm(), "KDN 파트장"))
                     .collect(Collectors.toList());
-            case "114" -> tempKepcoUserRepository.findAll().stream()
-                    .map(u -> toCandidate(u.getSabun(), u.getName(), "한전 담당자"))
+            case "111" -> userInfoRepository.findDeptHeadsByDepId(depId).stream()
+                    .map(u -> toCandidate(u.getEmpno(), u.getUserNm(), "KDN 부장"))
                     .collect(Collectors.toList());
+            case "114" -> kepcoStaffCandidates();
             default -> List.of();
         };
     }
@@ -597,13 +660,38 @@ public class WorkMyServiceImpl implements WorkMyService {
         return WorkMyDto.Candidate.builder().sabun(sabun).name(name).roleNm(roleNm).build();
     }
 
-    /** 작업지시서에 이미 지정된 작업자(WORKER_SABUN)를 기준으로 소속 파트를 해석한다. 미지정 시 null. */
-    private String resolvePartId(ItWorkReportVo report) {
+    /**
+     * 한전 담당자(결재자) 후보 목록. 실제 한전 인사정보 테이블엔 직책(파트장/직원) 구분 필드가 없어
+     * 역할 구분 없이 전원을 후보로 보여주지만, 처장(JIKGUB_HAN이 채워진 인원, 예: 이명종)은
+     * 부서 위 상위 직급이라 결재자 후보에서 제외한다.
+     */
+    private List<WorkMyDto.Candidate> kepcoStaffCandidates() {
+        return kepcoUserRepository.findAll().stream()
+                .filter(u -> u.getJikgubHan() == null || u.getJikgubHan().isBlank())
+                .map(u -> toCandidate(u.getSabun(), u.getName(), "한전 담당자"))
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * 결과 보고(109) 담당자를 좁혀 찾기 위한 소속 파트 해석.
+     * 우선 작업지시서에 이미 지정된 작업자(WORKER_SABUN) 기준으로 찾고,
+     * 아직 없다면(=지시서 배부(108) 파트장이 막 다음 담당자를 고르는 시점) 그 파트장 본인의 파트로 좁힌다
+     * — 그렇지 않으면 부서 전체 대리가 다 후보로 뜬다(실제 버그로 보고됨, 2026-07-07).
+     * 그 외 단계에서는 부서 전체(depId) 기준 조회로 폴백한다.
+     */
+    private String resolvePartId(ItWorkReportVo report, NSignVo current) {
         String workerSabun = report.getWorkerSabun();
-        if (workerSabun == null || workerSabun.isBlank()) {
-            return null;
+        if (workerSabun != null && !workerSabun.isBlank()) {
+            return partIdOf(workerSabun);
         }
-        return userInfoRepository.findByEmpnoAndUseYn(workerSabun, "Y").stream()
+        if ("108".equals(current.getActId())) {
+            return partIdOf(current.getSabun());
+        }
+        return null;
+    }
+
+    private String partIdOf(String empno) {
+        return userInfoRepository.findByEmpnoAndUseYn(empno, "Y").stream()
                 .findFirst()
                 .map(UserInfoVo::getPartId)
                 .orElse(null);

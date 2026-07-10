@@ -36,6 +36,7 @@ public class WorkMyDto {
         private String actIdNm;    // 처리한 단계명 (예: 지시서 승인)
         private String signLabel;  // 승인 / 반려
         private String regDt;      // 처리일시 yyyyMMddHHmmss (시분초 포함)
+        private String reason;     // 반려(반송) 사유, 승인 건은 null
     }
 
     // ── 다음 단계 담당자 후보 ─────────────────────────────────────
@@ -107,7 +108,6 @@ public class WorkMyDto {
         private java.util.List<CodeOption> workTypeOptions;
         private java.util.List<CodeOption> workGubunOptions;
         private java.util.List<CodeOption> workLevelOptions;
-        private java.util.List<CodeOption> departmentOptions; // 대상 KDN 부서 (WORKER_DEP_CD)
     }
 
     // ── 업무지시서 등록 요청 ─────────────────────────────────────────
@@ -124,7 +124,6 @@ public class WorkMyDto {
         private String workLevel;            // 작업레벨 (상/중/하)
         private String workPeriod;           // 처리기간 (일)
         private String expectedFinishedDt;   // 완료예정일 (yyyy-MM-dd)
-        private String targetDepCd;          // 대상 KDN 부서(WORKER_DEP_CD) - 이 일을 처리할 KDN 부서
         private String initialApproverSabun; // 최초 결재자(한전 파트장) 사번
         private String initialApproverName;  // 최초 결재자 이름
     }
@@ -176,6 +175,7 @@ public class WorkMyDto {
         private String currentActId; // 현재 대기 중인 단계 코드 (완료 건은 null)
         private boolean myTurn;      // 로그인 사용자가 현재 결재 대기자인지
         private WorkResultItem workResult; // 조치사항 (109단계 완료 전에는 null)
+        private List<ApprovalHistoryItem> approvalHistory; // 결재이력 (지금까지 거쳐간 승인/반려 처리자 + 시각)
     }
 
     // ── 첨부파일 다운로드 ─────────────────────────────────────────

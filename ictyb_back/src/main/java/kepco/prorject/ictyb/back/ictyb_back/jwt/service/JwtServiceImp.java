@@ -3,8 +3,8 @@ package kepco.prorject.ictyb.back.ictyb_back.jwt.service;
 import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.KdnDepVo;
 import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.KdnUserVo;
 import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.MwLginTknInfoVo;
-import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.TempKepcoDepVo;
-import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.TempKepcoUserVo;
+import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.KepcoDepVo;
+import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.KepcoUserVo;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.JwtTokenProvider;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.model.JwtUserDto;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.model.LoginRequest;
@@ -12,15 +12,18 @@ import kepco.prorject.ictyb.back.ictyb_back.jwt.model.LoginResponse;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.repository.KdnDepRepository;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.repository.KdnUserRepository;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.repository.MwLginTknInfoRepository;
-import kepco.prorject.ictyb.back.ictyb_back.jwt.repository.TempKepcoDepRepository;
-import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.TempKepcoUserRepository;
+import kepco.prorject.ictyb.back.ictyb_back.jwt.repository.KepcoDepRepository;
+import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.KepcoUserRepository;
 import lombok.RequiredArgsConstructor;
 
 import java.time.LocalDate;
 import java.util.Optional;
 
+import org.springframework.http.ResponseCookie;
 import org.springframework.stereotype.Service;
 
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.transaction.Transactional;
 
 @Service
@@ -29,10 +32,47 @@ public class JwtServiceImp implements JwtService {
 
     private final KdnDepRepository kdnDepRepository;
     private final KdnUserRepository kdnUserRepository;
-    private final TempKepcoDepRepository tempKepcoDepRepository;
-    private final TempKepcoUserRepository tempKepcoUserRepository;
+    private final KepcoDepRepository kepcoDepRepository;
+    private final KepcoUserRepository kepcoUserRepository;
     private final JwtTokenProvider jwtTokenProvider; // 1. JwtTokenProvider 주입 추가
     private final MwLginTknInfoRepository tokenRepository; // 2. 토큰 레포지토리 주입 추가
+
+    //SSO 자동 로그인 기능 추가
+    @Override
+    @Transactional // DB 등록 과정이 포함되므로 트랜잭션 처리를 권장합니다.
+    public LoginResponse loginByEmpno(String userEmpno, HttpServletRequest request, HttpServletResponse response) {
+        
+        Optional<KepcoUserVo> kepco_user = kepcoUserRepository.findBySabun(userEmpno);
+        System.out.println("kepco_user1 :::" + kepco_user.toString());
+        if (userEmpno == null || userEmpno.isEmpty()) {
+            return new LoginResponse(false, null, null, "SSO로 사용자 정보를 찾을 수 없습니다.", null);
+        }
+
+        //JWT 값 세팅
+        KepcoUserVo kepcoUserVo = kepco_user.get();
+
+        // 🌟 수정 2: user를 실제로 생성
+        JwtUserDto user = JwtUserDto.builder()
+        .userEmpno(userEmpno)
+        .empNm(kepcoUserVo.getName())
+        .depId(kepcoUserVo.getSosokCd())
+        .parDepId("")
+        .depTitle(kepcoUserVo.getSosokHan())
+        .kepcoMap("BONSA")
+        .build();
+
+
+        // 실제 유효한 JWT 토큰 생성
+        String accessToken = jwtTokenProvider.createAccessToken(user);
+        String refreshToken = jwtTokenProvider.createRefreshToken();
+
+        // HttpOnly 쿠키로 accessToken 심기 (기존 login()과 동일 로직)
+        ResponseCookie cookie = ResponseCookie.from("accessToken", accessToken)
+                .httpOnly(true).path("/").maxAge(3600).build();
+        response.addHeader("Set-Cookie", cookie.toString());
+
+        return new LoginResponse(true, accessToken, refreshToken, "SSO 자동 로그인 성공", user);
+    }
 
     @Override
     @Transactional // DB 등록 과정이 포함되므로 트랜잭션 처리를 권장합니다.
@@ -44,8 +84,8 @@ public class JwtServiceImp implements JwtService {
             return authenticateKdnUser(kdnUser.get(), request.getPassword());
         }
 
-        // 2. KDN에 없으면 한전(KEPCO) 인사정보(temp_kepco_user)에서 조회 (임시)
-        Optional<TempKepcoUserVo> kepcoUser = tempKepcoUserRepository.findBySabun(request.getUserEmpno());
+        // 2. KDN에 없으면 한전(KEPCO) 인사정보(ictyb_kepco_user)에서 조회
+        Optional<KepcoUserVo> kepcoUser = kepcoUserRepository.findBySabun(request.getUserEmpno());
         if (kepcoUser.isPresent()) {
             return authenticateKepcoUser(kepcoUser.get());
         }
@@ -78,16 +118,16 @@ public class JwtServiceImp implements JwtService {
     }
 
     /**
-     * 한전(KEPCO) 사용자 로그인 인증 (임시: temp_kepco_user/temp_kepco_dep 기준)
+     * 한전(KEPCO) 사용자 로그인 인증 (ictyb_kepco_user/ictyb_kepco_dep 기준)
      * 한전 사람은 실제로는 SSO로 인증되어 비밀번호가 없으므로, 비밀번호 검증 없이(공란이어도) 사번만으로 로그인시킨다.
      * 추후 한전 망으로 이관하면서 실제 SSO 연동으로 교체할 예정.
      */
-    private LoginResponse authenticateKepcoUser(TempKepcoUserVo user) {
-        Optional<TempKepcoDepVo> depInfoOpt = tempKepcoDepRepository.findByOfCd(user.getSosokCd());
+    private LoginResponse authenticateKepcoUser(KepcoUserVo user) {
+        Optional<KepcoDepVo> depInfoOpt = kepcoDepRepository.findByOfCd(user.getSosokCd());
         if (depInfoOpt.isEmpty()) {
             return new LoginResponse(false, null, null, "사용자의 부서 정보를 찾을 수 없습니다.", null);
         }
-        TempKepcoDepVo userDepInfo = depInfoOpt.get();
+        KepcoDepVo userDepInfo = depInfoOpt.get();
 
         JwtUserDto userInfo = JwtUserDto.builder()
             .depId(userDepInfo.getOfCd())

@@ -19,4 +19,7 @@ public interface NSignRepository extends JpaRepository<NSignVo, NSignPk> {
 
     /** 관련자 판단용 조회 */
     List<NSignVo> findByInstId(String instId);
+
+    /** 목록 조회 시 건별 현재결재자를 한 번에 가져오기 위한 조회 */
+    List<NSignVo> findByInstIdIn(List<String> instIds);
 }

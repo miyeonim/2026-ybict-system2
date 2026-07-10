@@ -1,8 +1,13 @@
 package kepco.prorject.ictyb.back.ictyb_back.jwt.controller;
 
+import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.KepcoUserVo;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.model.LoginRequest;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.model.LoginResponse;
 import kepco.prorject.ictyb.back.ictyb_back.jwt.service.JwtService;
+import kepco.prorject.ictyb.back.ictyb_back.jwt.service.SsoUtil;
+import kepco.prorject.ictyb.back.ictyb_back.work_my.repository.KepcoUserRepository;
+import lombok.RequiredArgsConstructor;
+
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
@@ -11,20 +16,48 @@ import org.springframework.web.bind.annotation.*;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.servlet.http.Cookie;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse; // 이 패키지가 꼭 필요하옵니다.
 
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 
 import java.util.Map;
+import java.util.Optional;
 
 @Tag(name = "인증 API", description = "로그인 관련 API")
 @RestController
+@RequiredArgsConstructor
 @RequestMapping("/api/auth")
 public class JwtController {
 
     @Autowired
     private JwtService jwtService;
+
+    private final KepcoUserRepository kepcoUserRepository;
+
+
+    @Operation(summary = "SSO로 자동 로그인 구현", description = "sso로 확인합니다.")
+    @PostMapping("/v1.0/sso-login")
+    public ResponseEntity<LoginResponse> ssoLogin(HttpServletRequest request, HttpServletResponse response) {
+        //String userEmpno = SsoUtil.getUserId(request); // 쿠키(pgsecuid) 복호화해서 사번 추출 -> 향후 SSO 관련해서 추가할껏
+        String userEmpno = null;
+        //String userEmpno = "19109330"; //temp
+
+        if (userEmpno == null || userEmpno.isEmpty()) {
+            return ResponseEntity.ok(new LoginResponse(false, null, null, "SSO 정보 없음", null));
+        }
+
+        Optional<KepcoUserVo> kepco_user = kepcoUserRepository.findBySabun(userEmpno);
+        System.out.println("kepco_user2 :::" + kepco_user.toString());
+        if (kepco_user == null) {
+            System.out.println("SSO 사번 확인됨 그러나 한전 사용자 아님 :: {"+userEmpno+"}");
+            return ResponseEntity.ok(new LoginResponse(false, null, null, "한전 사용자가 아닙니다.", null));
+        }
+
+        return ResponseEntity.ok(jwtService.loginByEmpno(userEmpno, request, response));
+    }
+
 
     @Operation(summary = "로그인", description = "사번과 비밀번호로 로그인을 수행합니다.")
     @PostMapping("/v1.0/login")

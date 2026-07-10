@@ -122,12 +122,44 @@ FLUSH PRIVILEGES;
 ```bash
 # 0) 개발 도구 옮기기 : vscode or STS 
 
-# 1) 자바 버전 : 17
+# 1-1) 자바 버전 : 17
 https://adoptium.net/temurin/releases/?version=17
-```
+
+# 1-2) mvnw 설치 여부확인 
+ls -la | grep mvnw
+# -o 빼고, 인터넷 연결된 상태로 실행 → 부족한 아티팩트 자동 다운로드됨
+mvn -Dmaven.repo.local=./offline-repo clean package
+mvn -o -Dmaven.repo.local=./offline-repo clean package
+
+# maven 파일 설치
+ https://archive.apache.org/dist/maven/maven-3/3.9.10/binaries/apache-maven-3.9.10-bin.zip
+
 
 # 2) Mac에서 오프라인 Maven 캐시 만들기 
-```bash
+/Users/miyeonlim/project/ictyb_project2/     ← 프로젝트 루트 (여기 안에 ictyb_back 있음)
+/Users/miyeonlim/Downloads/ict_back/        ← 이관 파일들을 모아둘 폴더 (새로 만드는 곳)
+mkdir -p /Users/miyeonlim/Downloads/ict_back
+
+cd /Users/miyeonlim/project/ictyb_project
+
+zip -r /Users/miyeonlim/Downloads/ict_back/ictyb_back_transfer.zip \
+  ictyb_back -x "ictyb_back/target/*"
+
+#테스트 실행
+curl -O https://archive.apache.org/dist/maven/maven-3/3.9.10/binaries/apache-maven-3.9.10-bin.zip
+
+
+# 3) Mavne 압축 풀고 경로 설정  
+그 다음 환경변수 설정 (PowerShell 관리자 권한으로):
+setx MAVEN_HOME "C:\tools\maven\apache-maven-3.9.10"
+setx PATH "%PATH%;%MAVEN_HOME%\bin"
+
+버전 확인
+mvn -version
+
+mvn -o -Dmaven.repo.local=.\offline-repo clean package
+mvn -o -Dmaven.repo.local=.\offline-repo spring-boot:run
+
 
 ```
 
@@ -167,6 +199,12 @@ npm install --cache ./offline-cache --os=win32 --cpu=x64 --force
 
 # 4) Linux(x64)용도 미리 추가 (운영 서버 대비)
 npm install --cache ./offline-cache --os=linux --cpu=x64 --force
+
+#5) 설치 되어 있는게 어떤건지 확인하는 방법 
+ls node_modules/@rollup  
+ls node_modules/@esbuild 
+
+
 ```
 
 ### 3-3. 이관용 압축 (node_modules 제외)
@@ -227,6 +265,46 @@ server {
 - `npm install --offline` → `npm run build` (또는 `pm2`로 실행)
 
 ---
+
+
+
+### 설치 파일 URL
+
+```bash
+# vscode 다운로드하기 
+https://code.visualstudio.com/docs/?dv=w%EE%80%80in
+
+
+```
+
+### 참고 파일 이관 
+
+```bash
+# 백단
+rsync -av --dry-run \
+  --exclude 'application*.yml' \
+  --exclude 'application*.properties' \
+  --exclude 'target/' \
+  --exclude 'offline-repo/' \
+  --exclude '.git/' \
+  /Users/miyeonlim/project/ictyb_project/ictyb_back/src/ \
+  /Users/miyeonlim/project/ictyb_project2/ictyb_back/src/
+
+# 프론트
+rsync -av \
+  --exclude '.env' \
+  --exclude 'vite.config.ts' \
+  --exclude 'node_modules/' \
+  --exclude 'build/' \
+  --exclude 'offline-cache/' \
+  --exclude '.git/' \
+  /Users/miyeonlim/project/ictyb_project/ictyb_front/app/ \
+  /Users/miyeonlim/project/ictyb_project2/ictyb_front/app/
+
+```
+
+
+
 
 ## ✅ 체크리스트 요약
 

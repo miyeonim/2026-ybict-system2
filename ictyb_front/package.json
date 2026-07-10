@@ -2,14 +2,17 @@
   "name": "ictyb_front",
   "private": true,
   "type": "module",
+
   "scripts": {
-    "build": "react-router build",
-    "dev": "react-router dev --host 0.0.0.0",
-    "dev-backup": "react-router dev",
+    "local": "react-router dev --host 0.0.0.0 --mode localdev",
+    "dev": "react-router dev --host 0.0.0.0 --mode development",
+    "build:dev": "react-router build --mode development",
+    "build": "react-router build --mode production",
+    "build:prod": "react-router build --mode production",
     "start": "react-router-serve ./build/server/index.js",
     "typecheck": "react-router typegen && tsc"
   },
-  
+
   "dependencies": {
     "@base-ui/react": "^1.5.0",
     "@fontsource-variable/geist": "^5.2.9",
@@ -42,7 +45,6 @@
   "devDependencies": {
     "@react-router/dev": "7.16.0",
     "@tailwindcss/vite": "^4.2.2",
-    "@types/axios": "^0.9.36",
     "@types/node": "^22",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",

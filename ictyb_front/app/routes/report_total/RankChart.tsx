@@ -116,9 +116,13 @@ interface RankBarChartProps {
 }
 
 function RankBarChart({ chartData }: RankBarChartProps) {
+  // pending: 0(완료율 100%)인 항목은 recharts가 해당 스택 구간을 그리지 않아 라벨도 함께 사라지므로,
+  // 렌더링용 데이터에서만 미세한 값으로 보정해 라벨이 항상 표시되게 한다.
+  const renderData = chartData.map((d) => (d.pending === 0 ? { ...d, pending: 0.0001 } : d));
+
   return (
     <ChartContainer config={chartConfig} className="h-[250px] w-full">
-      <BarChart data={chartData} margin={{ top: 50, bottom: 0 }}>
+      <BarChart data={renderData} margin={{ top: 50, bottom: 0 }}>
         <CartesianGrid vertical={false} stroke="#E2E8F0" />
         <XAxis dataKey="name" tickLine={false} axisLine={false} tickMargin={10} />
         <YAxis hide />

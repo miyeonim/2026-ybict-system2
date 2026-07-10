@@ -17,6 +17,7 @@ import {
   ChevronDown,
   User,
   X,
+  History as HistoryIcon,
 } from "lucide-react";
 import { useAuthContext } from "@routes/common/jwt/AuthContext";
 import {
@@ -37,17 +38,23 @@ import type { WorksMyDetail, WorksMyCandidate } from "@routes/works_my/WorksMyDt
 
 export type ModalTab = "기본정보" | "업무협의" | "작업완료결재";
 
-/** 작업결과 보고(109) 이후 단계 - 결재자는 작업완료결재 탭에서 조치사항을 확인해야만 승인할 수 있다 */
-export const POST_WORK_RESULT_ACT_IDS = ["111", "114"];
+/**
+ * 작업완료 결재 탭으로 자동 이동해야 하는 단계.
+ * - 109(결과 보고): 담당자 본인 차례일 때 조치사항을 "작성/제출"하는 화면이 이 탭에만 있다.
+ *   원래 111/114만 있었는데, 109가 빠져 있어 담당자가 상세를 열어도 기본정보 탭에 머물러
+ *   제출 버튼을 못 찾는 문제가 있었다(2026-07-08, 자료추출 건에서 재현 - "승인 버튼이 안 보인다").
+ * - 111/114: 결재자가 이미 제출된 조치사항을 "확인"해야만 승인할 수 있다.
+ */
+export const POST_WORK_RESULT_ACT_IDS = ["109", "111", "114"];
 
 export interface WorkDetailItem {
   workOrderNo: string;
   title: string;
   department: string;
-  part: string;
-  status: string;
-  approvalStatus: string;
   dueDt: string;
+  part?: string;
+  status?: string;
+  approvalStatus?: string;
   workType?: string;
   managerName?: string;
   regDt?: string;
@@ -298,7 +305,132 @@ const WorkResultSection: React.FC<{
   );
 };
 
-const formatDetailDate = (dt: string) => (dt && dt.length >= 8 ? dt.slice(0, 8) : dt);
+const formatDetailDate = (dt: string | null) => (dt && dt.length >= 8 ? dt.slice(0, 8) : dt);
+
+// yyyyMMddHHmmss -> yyyy-MM-dd HH:mm:ss (결재이력 표시용, 시분초까지)
+const formatDateTime = (dt: string | null) => {
+  if (!dt || dt.length < 14) return formatDetailDate(dt);
+  return `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)} ${dt.slice(8, 10)}:${dt.slice(10, 12)}:${dt.slice(12, 14)}`;
+};
+
+// yyyyMMddHHmmss -> yy.MM.dd HH:mm (작성자/승인자 박스 표시용, 초 단위 생략)
+const formatBoxDateTime = (dt: string | null) => {
+  if (!dt || dt.length < 12) return formatDetailDate(dt);
+  return `${dt.slice(2, 4)}.${dt.slice(4, 6)}.${dt.slice(6, 8)} ${dt.slice(8, 10)}:${dt.slice(10, 12)}`;
+};
+
+// approvalHistory에서 해당 단계(actIdNm)의 가장 최근 "승인" 처리 항목을 찾는다.
+// 반려된 항목이나 아직 처리 전인 대기(결재대기) 항목은 제외한다 - 재상신으로 같은 단계가
+// 여러 번 기록될 수 있으므로 뒤에서부터 찾아 가장 최신 승인 건을 취한다.
+const findApprovedEntry = (
+  history: WorksMyDetail["approvalHistory"] | undefined,
+  actIdNm: string,
+) => {
+  if (!history) return null;
+  for (let i = history.length - 1; i >= 0; i--) {
+    const h = history[i];
+    if (h.actIdNm === actIdNm && h.signLabel === "승인") return h;
+  }
+  return null;
+};
+
+// 작성자(104)/승인자(106) 이름 + 승인시각을 나란히 보여주는 요약 박스.
+// 106이 아직 승인 전이면 이름/시각 모두 공백으로 둔다.
+// variant="dark"는 남색 헤더 위에 얹히는 반투명 스타일 (기본은 밝은 배경용).
+const WriterApproverBox: React.FC<{
+  history: WorksMyDetail["approvalHistory"];
+  variant?: "light" | "dark";
+}> = ({ history, variant = "light" }) => {
+  const writer = findApprovedEntry(history, "지시서 작성");
+  const approver = findApprovedEntry(history, "지시서 승인");
+  const dark = variant === "dark";
+
+  const Column: React.FC<{ label: string; entry: WorksMyDetail["approvalHistory"][number] | null }> = ({
+    label,
+    entry,
+  }) => (
+    <div className="shrink-0 min-w-[116px] flex flex-col">
+      <div
+        className={`px-4 py-1 text-[11px] font-medium text-center border-b ${
+          dark
+            ? "bg-white/10 text-white/70 border-white/20"
+            : "bg-slate-50 text-slate-500 border-slate-200"
+        }`}
+      >
+        {label}
+      </div>
+      <div className={`px-4 pt-1.5 text-sm text-center whitespace-nowrap font-medium ${dark ? "text-white" : "text-slate-800"}`}>
+        {entry?.name ?? "-"}
+      </div>
+      <div className={`px-4 pb-1.5 text-xs text-center whitespace-nowrap ${dark ? "text-white/60" : "text-slate-400"}`}>
+        {entry?.regDt ? formatBoxDateTime(entry.regDt) : "-"}
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      className={`shrink-0 flex rounded-md overflow-hidden border divide-x ${
+        dark ? "border-white/20 divide-white/20" : "border-slate-200 divide-slate-200"
+      }`}
+    >
+      <Column label="작성자" entry={writer} />
+      <Column label="승인자" entry={approver} />
+    </div>
+  );
+};
+
+// 결재 이력(지금까지 거쳐간 승인/반려 처리자 + 시각)을 처리 순서대로 보여주는 타임라인
+const ApprovalHistorySection: React.FC<{ history: WorksMyDetail["approvalHistory"] }> = ({ history }) => {
+  if (!history || history.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <p className="text-sm text-slate-400 mb-1.5 flex items-center gap-1">
+        <HistoryIcon className="size-3.5" />
+        결재 이력
+      </p>
+      <div className="flex flex-col bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+        {history.map((h, idx) => (
+          <div key={idx} className="flex items-start gap-3">
+            <div className="flex flex-col items-center pt-0.5">
+              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-white border border-slate-200 text-slate-500 text-[11px] font-semibold">
+                {idx + 1}
+              </span>
+              {idx < history.length - 1 && (
+                <span className="w-px flex-1 bg-slate-200 mt-1" />
+              )}
+            </div>
+            <div className="pb-3 flex-1">
+              <div className="text-sm">
+                <span className="font-medium text-slate-800">{h.name}</span>
+                <span className="text-slate-400"> · {h.actIdNm}</span>
+                <span
+                  className={
+                    h.signLabel === "반려"
+                      ? "text-red-500 font-medium ml-1"
+                      : h.signLabel === "결재대기"
+                      ? "text-amber-500 font-medium ml-1"
+                      : "text-emerald-600 font-medium ml-1"
+                  }
+                >
+                  {h.signLabel}
+                </span>
+              </div>
+              <div className="text-xs text-slate-400 mt-0.5">
+                {h.regDt ? formatDateTime(h.regDt) : "결재 대기 중"}
+              </div>
+              {h.signLabel === "반려" && h.reason && (
+                <div className="text-xs text-red-500 mt-1 bg-red-50 border border-red-100 rounded px-2 py-1">
+                  반송사유: {h.reason}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
 
 const WorkDetailModal: React.FC<Props> = ({
   item,
@@ -487,16 +619,19 @@ const WorkDetailModal: React.FC<Props> = ({
         className="max-w-6xl sm:max-w-6xl max-h-[95vh] p-0 gap-0 overflow-hidden flex flex-col"
       >
         {/* 다크 헤더 */}
-        <div className="bg-[var(--sidebar-bg)] px-5 py-4 flex items-start justify-between">
+        <div className="bg-[var(--sidebar-bg)] px-5 py-5 flex items-center justify-between">
           <div className="flex-1 min-w-0">
             <p className="text-xs text-white/60 mb-1">{breadcrumb}</p>
             <DialogTitle className="text-base font-semibold text-white leading-snug">
               {item?.title}
             </DialogTitle>
           </div>
+          {detail && (
+            <WriterApproverBox history={detail.approvalHistory} variant="dark" />
+          )}
           <button
             onClick={onClose}
-            className="text-white/70 hover:text-white ml-4 mt-0.5 shrink-0"
+            className="text-white/70 hover:text-white ml-4 shrink-0"
           >
             <X className="size-5" />
           </button>
@@ -530,13 +665,15 @@ const WorkDetailModal: React.FC<Props> = ({
                 [
                   { label: "번호", value: item.workOrderNo },
                   { label: "부서", value: item.department },
-                  { label: "파트", value: item.part },
+                  item.part ? { label: "파트", value: item.part } : null,
                   item.workType ? { label: "유형", value: item.workType } : null,
                   item.managerName
                     ? { label: "담당자", value: item.managerName }
                     : null,
-                  { label: "상태", value: item.status },
-                  { label: "결재", value: item.approvalStatus },
+                  item.status ? { label: "상태", value: item.status } : null,
+                  item.approvalStatus
+                    ? { label: "결재", value: item.approvalStatus }
+                    : null,
                   item.regDt
                     ? { label: "등록일", value: formatDate(item.regDt) }
                     : null,
@@ -620,6 +757,8 @@ const WorkDetailModal: React.FC<Props> = ({
                   </ul>
                 </div>
               )}
+
+              {detail && <ApprovalHistorySection history={detail.approvalHistory} />}
             </div>
           )}
 

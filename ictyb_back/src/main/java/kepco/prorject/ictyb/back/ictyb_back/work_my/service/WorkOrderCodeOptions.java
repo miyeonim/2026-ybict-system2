@@ -21,7 +21,8 @@ public final class WorkOrderCodeOptions {
     );
 
     public static final List<WorkMyDto.CodeOption> WORK_TYPE = List.of(
-            WorkMyDto.CodeOption.of("01", "업무지원")
+            WorkMyDto.CodeOption.of("01", "업무지원"),
+            WorkMyDto.CodeOption.of("02", "자료추출")
     );
 
     public static final List<WorkMyDto.CodeOption> WORK_GUBUN = List.of(
