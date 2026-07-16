@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   WorksAllListItem,
   WorksAllStatus,
-  WorksAllApprovalStatus,
   WorksAllDepartment,
 } from "./WorksAllDto";
 import { fetchWorksAllList } from "~/hooks/work_all/WorksAllController";
@@ -26,7 +25,15 @@ import {
 } from "@/components/ui/pagination";
 import WorkDetailModal from "@routes/common/components/WorkDetailModal";
 import type { WorkDetailItem } from "@routes/common/components/WorkDetailModal";
-import { CircleDollarSign, Zap, Wrench, CalendarDays } from "lucide-react";
+import { CircleDollarSign, Zap, Wrench, CalendarDays, History as HistoryIcon } from "lucide-react";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { fetchWorkDetail } from "~/hooks/work_my/WorksMyController";
+import type { WorksMyApprovalHistoryItem } from "@routes/works_my/WorksMyDto";
 
 // 상태별 뱃지 색상 (app.css의 --status-new/progress/done 토큰 재사용)
 const STATUS_COLOR: Record<WorksAllStatus, string> = {
@@ -34,11 +41,6 @@ const STATUS_COLOR: Record<WorksAllStatus, string> = {
   "처리 중": "var(--status-progress)",
   완료: "var(--status-done)",
   협의: "#94A3B8", // slate-400
-};
-
-const APPROVAL_COLOR: Record<WorksAllApprovalStatus, string> = {
-  "결재 완료": "var(--status-done)",
-  미요청: "#94A3B8",
 };
 
 const DEPARTMENTS: WorksAllDepartment[] = ["영업", "배전", "기술"];
@@ -52,7 +54,7 @@ const DEPARTMENT_ICON: Record<WorksAllDepartment, React.ElementType> = {
 const ALL_PART = "전체";
 
 const ALL_STATUS = "전체";
-const STATUS_FILTERS: WorksAllStatus[] = ["접수", "처리 중", "완료", "협의"];
+const STATUS_FILTERS: WorksAllStatus[] = ["접수", "처리 중", "협의", "완료"];
 const SEEN_NEGOTIATIONS_STORAGE_KEY = "worksAll_seenNegotiations";
 const PAGE_SIZE = 10;
 
@@ -85,6 +87,108 @@ const CountBadge: React.FC<{ count: number; active: boolean }> = ({
   </span>
 );
 
+// yyyyMMddHHmmss -> yyyy-MM-dd HH:mm:ss (결재이력 표시용, 시분초까지)
+const formatDateTime = (dt: string | null) => {
+  if (!dt || dt.length < 14) return dt;
+  return `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)} ${dt.slice(8, 10)}:${dt.slice(10, 12)}:${dt.slice(12, 14)}`;
+};
+
+// 결재이력 팝업을 여는 버튼 (목록 화면에서는 버튼만 표시, 이력은 클릭 시 조회)
+const ApprovalHistoryButton: React.FC<{ onOpen: () => void }> = ({ onOpen }) => (
+  <Button variant="outline" size="sm" className="h-7 px-2.5 text-xs" onClick={onOpen}>
+    <HistoryIcon className="size-3.5" />
+    결재이력
+  </Button>
+);
+
+// 결재이력을 처리 순서대로(일렬로) 보여주는 팝업 - 열릴 때마다 상세 조회 API로 이력을 조회한다(지연 로딩)
+const ApprovalHistoryDialog: React.FC<{
+  workOrderNo: string | null;
+  onClose: () => void;
+}> = ({ workOrderNo, onClose }) => {
+  const [history, setHistory] = useState<WorksMyApprovalHistoryItem[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!workOrderNo) return;
+    setHistory([]);
+    setError(null);
+    setLoading(true);
+    fetchWorkDetail(workOrderNo)
+      .then((detail) => setHistory(detail.approvalHistory ?? []))
+      .catch(() => setError("결재이력을 불러오지 못했습니다."))
+      .finally(() => setLoading(false));
+  }, [workOrderNo]);
+
+  return (
+    <Dialog open={!!workOrderNo} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle>결재이력</DialogTitle>
+
+        {loading ? (
+          <div className="text-center py-8 text-sm text-slate-400">
+            <span className="inline-block w-4 h-4 border-2 border-slate-300 border-t-[var(--sidebar-bg)] rounded-full animate-spin mr-2 align-middle" />
+            불러오는 중...
+          </div>
+        ) : error ? (
+          <div className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-md border border-red-200">
+            {error}
+          </div>
+        ) : history.length === 0 ? (
+          <p className="text-sm text-slate-400 py-6 text-center">결재이력이 없습니다.</p>
+        ) : (
+          <div className="flex flex-col gap-3 py-2 max-h-96 overflow-y-auto">
+            {history.map((h, idx) => (
+              <div key={idx} className="flex items-start gap-3">
+                <div className="flex flex-col items-center pt-0.5">
+                  <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-semibold">
+                    {idx + 1}
+                  </span>
+                  {idx < history.length - 1 && (
+                    <span className="w-px flex-1 bg-slate-200 mt-1" />
+                  )}
+                </div>
+                <div className="pb-3 flex-1">
+                  <div className="text-sm">
+                    <span className="font-medium text-slate-800">{h.name}</span>
+                    <span className="text-slate-400"> · {h.actIdNm}</span>
+                    <span
+                      className={
+                        h.signLabel === "반려"
+                          ? "text-red-500 font-medium ml-1"
+                          : h.signLabel === "결재대기"
+                          ? "text-amber-500 font-medium ml-1"
+                          : "text-emerald-600 font-medium ml-1"
+                      }
+                    >
+                      {h.signLabel}
+                    </span>
+                  </div>
+                  <div className="text-xs text-slate-400 mt-0.5">
+                    {h.regDt ? formatDateTime(h.regDt) : "결재 대기 중"}
+                  </div>
+                  {h.signLabel === "반려" && h.reason && (
+                    <div className="text-xs text-red-500 mt-1 bg-red-50 border border-red-100 rounded px-2 py-1">
+                      반송사유: {h.reason}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            닫기
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
 const WorksAllMain: React.FC = () => {
   const [list, setList] = useState<WorksAllListItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -99,6 +203,7 @@ const WorksAllMain: React.FC = () => {
   );
   const [detailItem, setDetailItem] = useState<WorksAllListItem | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  const [historyWorkOrderNo, setHistoryWorkOrderNo] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -297,7 +402,7 @@ const WorksAllMain: React.FC = () => {
     if (loading) {
       return (
         <TableRow>
-          <TableCell colSpan={9} className="text-center py-10 text-slate-400">
+          <TableCell colSpan={8} className="text-center py-10 text-slate-400">
             <span className="inline-block w-5 h-5 border-2 border-slate-300 border-t-[var(--sidebar-bg)] rounded-full animate-spin mr-2 align-middle" />
             불러오는 중...
           </TableCell>
@@ -308,7 +413,7 @@ const WorksAllMain: React.FC = () => {
     if (statusFilteredList.length === 0) {
       return (
         <TableRow>
-          <TableCell colSpan={9} className="text-center py-10 text-slate-400">
+          <TableCell colSpan={8} className="text-center py-10 text-slate-400">
             등록된 업무지시서가 없습니다.
           </TableCell>
         </TableRow>
@@ -327,20 +432,16 @@ const WorksAllMain: React.FC = () => {
         <TableCell className="font-medium text-[var(--sidebar-bg)]">
           {item.title}
         </TableCell>
-        <TableCell className="text-center">{item.workType}</TableCell>
         <TableCell className="text-center">{item.part}</TableCell>
         <TableCell className="text-center">{item.managerName}</TableCell>
-        <TableCell className="text-center">
-          <DotBadge
-            label={item.approvalStatus}
-            color={APPROVAL_COLOR[item.approvalStatus]}
-          />
-        </TableCell>
         <TableCell className="text-center">
           <DotBadge label={item.status} color={STATUS_COLOR[item.status]} />
         </TableCell>
         <TableCell className="text-center">{formatDate(item.regDt)}</TableCell>
         <TableCell className="text-center">{formatDate(item.dueDt)}</TableCell>
+        <TableCell onClick={(e) => e.stopPropagation()} className="text-center cursor-default">
+          <ApprovalHistoryButton onOpen={() => setHistoryWorkOrderNo(item.workOrderNo)} />
+        </TableCell>
       </TableRow>
     ));
   };
@@ -471,16 +572,10 @@ const WorksAllMain: React.FC = () => {
                 제목
               </TableHead>
               <TableHead className="w-[110px] text-center text-[var(--sidebar-bg)] font-bold">
-                유형
-              </TableHead>
-              <TableHead className="w-[110px] text-center text-[var(--sidebar-bg)] font-bold">
                 파트
               </TableHead>
               <TableHead className="w-[100px] text-center text-[var(--sidebar-bg)] font-bold">
                 담당자
-              </TableHead>
-              <TableHead className="w-[110px] text-center text-[var(--sidebar-bg)] font-bold">
-                결재
               </TableHead>
               <TableHead className="w-[100px] text-center text-[var(--sidebar-bg)] font-bold">
                 상태
@@ -490,6 +585,9 @@ const WorksAllMain: React.FC = () => {
               </TableHead>
               <TableHead className="w-[120px] text-center text-[var(--sidebar-bg)] font-bold">
                 마감일
+              </TableHead>
+              <TableHead className="w-[120px] text-center text-[var(--sidebar-bg)] font-bold">
+                결재이력
               </TableHead>
             </TableRow>
           </TableHeader>
@@ -565,6 +663,11 @@ const WorksAllMain: React.FC = () => {
             닫기
           </Button>
         }
+      />
+
+      <ApprovalHistoryDialog
+        workOrderNo={historyWorkOrderNo}
+        onClose={() => setHistoryWorkOrderNo(null)}
       />
     </div>
   );

@@ -49,6 +49,11 @@ export const addComment = async (
   return res.data.data;
 };
 
+/** 지시번호에 연결된 모든 협의 스레드를 로그인 사용자 기준으로 일괄 읽음 처리 */
+export const markDiscussionsRead = async (instrNo: string): Promise<void> => {
+  await apiClient.post<BaseResponse<void>>(`/api/work_opinion/v1.0/${instrNo}/read`);
+};
+
 /** 댓글 첨부파일을 브라우저를 통해 즉시 다운로드합니다. */
 export const downloadCommentAttach = (cmntId: string, seqNo: number, realFileName: string) => {
   const url = `http://localhost:8082/api/work_opinion/v1.0/attach/download?cmntId=${cmntId}&seqNo=${seqNo}`;

@@ -7,6 +7,15 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   MessageSquare,
   FileText,
@@ -17,7 +26,7 @@ import {
   ChevronDown,
   User,
   X,
-  History as HistoryIcon,
+  Pencil,
 } from "lucide-react";
 import { useAuthContext } from "@routes/common/jwt/AuthContext";
 import {
@@ -25,6 +34,7 @@ import {
   createDiscussion,
   addComment,
   downloadCommentAttach,
+  markDiscussionsRead,
 } from "@hooks/work_opinion/WorkOpinionController";
 import type { DiscussionItem } from "@hooks/work_opinion/type";
 import {
@@ -33,19 +43,17 @@ import {
   downloadWorkResultAttach,
   fetchNextCandidates,
   submitApproval,
+  fetchCreateOptions,
+  updateWorkOrder,
 } from "@hooks/work_my/WorksMyController";
-import type { WorksMyDetail, WorksMyCandidate } from "@routes/works_my/WorksMyDto";
+import type {
+  WorksMyDetail,
+  WorksMyCandidate,
+  WorksMyCreateOptions,
+  WorksMyUpdateRequest,
+} from "@routes/works_my/WorksMyDto";
 
-export type ModalTab = "기본정보" | "업무협의" | "작업완료결재";
-
-/**
- * 작업완료 결재 탭으로 자동 이동해야 하는 단계.
- * - 109(결과 보고): 담당자 본인 차례일 때 조치사항을 "작성/제출"하는 화면이 이 탭에만 있다.
- *   원래 111/114만 있었는데, 109가 빠져 있어 담당자가 상세를 열어도 기본정보 탭에 머물러
- *   제출 버튼을 못 찾는 문제가 있었다(2026-07-08, 자료추출 건에서 재현 - "승인 버튼이 안 보인다").
- * - 111/114: 결재자가 이미 제출된 조치사항을 "확인"해야만 승인할 수 있다.
- */
-export const POST_WORK_RESULT_ACT_IDS = ["109", "111", "114"];
+export type ModalTab = "기본정보" | "업무협의";
 
 export interface WorkDetailItem {
   workOrderNo: string;
@@ -72,6 +80,8 @@ interface Props {
   onTabChange?: (tab: ModalTab) => void;
   /** 새 업무협의(피드백) 등록 완료 시 호출됨 - 부모 화면의 목록/피드백 탭 상태를 새로고침할 때 사용 */
   onDiscussionCreated?: (workOrderNo: string) => void;
+  /** 업무협의 탭 진입해 협의 목록을 읽음 처리한 뒤 호출됨 - 부모 화면의 협의 탭 new! 배지를 새로고침할 때 사용 */
+  onDiscussionsRead?: (workOrderNo: string) => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -84,7 +94,6 @@ const formatBytes = (bytes: number) => {
 const TABS: { key: ModalTab; label: string; icon: React.ElementType }[] = [
   { key: "기본정보", label: "기본 정보", icon: FileText },
   { key: "업무협의", label: "업무 협의", icon: MessageSquare },
-  { key: "작업완료결재", label: "작업완료 결재", icon: CheckSquare },
 ];
 
 const BasicInfoRow: React.FC<{ label: string; children: React.ReactNode }> = ({
@@ -97,7 +106,7 @@ const BasicInfoRow: React.FC<{ label: string; children: React.ReactNode }> = ({
   </div>
 );
 
-// 작업완료 결재 탭: 조치사항(작업결과) 조회 및 (109단계 작업자 본인 차례일 때) 작성/제출
+// 조치사항(작업결과) 섹션: 기본 정보 탭 하단에 표시. 조회 및 (109단계 작업자 본인 차례일 때) 작성/제출
 const WorkResultSection: React.FC<{
   detail: WorksMyDetail | null;
   onSubmitted?: (workOrderNo: string) => void;
@@ -118,7 +127,14 @@ const WorkResultSection: React.FC<{
     if (!canWrite || !detail) return;
     setLoadingCandidates(true);
     fetchNextCandidates(detail.workOrderNo)
-      .then((res) => setCandidates(res.candidates))
+      .then((res) => {
+        setCandidates(res.candidates);
+        // 후보가 한전 반송자 한 명으로 고정된 경우(한전이 실제 작업자에게 직접 반송한 재작업 건)처럼
+        // 후보가 1명뿐이면 선택할 필요 없이 바로 선택된 상태로 둔다.
+        if (res.candidates.length === 1) {
+          setSelectedSabun(res.candidates[0].sabun);
+        }
+      })
       .catch(() => setError("다음 결재자 후보 조회에 실패했습니다."))
       .finally(() => setLoadingCandidates(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -237,6 +253,17 @@ const WorkResultSection: React.FC<{
           <Paperclip className="size-4" />
           첨부파일
         </Button>
+        <div
+          className="border-2 border-dashed border-slate-300 rounded-lg px-4 py-6 text-center text-sm text-slate-500 cursor-pointer hover:border-[var(--sidebar-bg)] hover:text-[var(--sidebar-bg)] hover:bg-slate-50 transition-colors"
+          onClick={() => resultFileInputRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            handleResultFileAdd(e.dataTransfer.files);
+          }}
+        >
+          📁 클릭하거나 파일을 여기로 드래그하세요
+        </div>
         {resultFiles.length > 0 && (
           <ul className="flex flex-col gap-1.5">
             {resultFiles.map((file, idx) => (
@@ -305,13 +332,277 @@ const WorkResultSection: React.FC<{
   );
 };
 
-const formatDetailDate = (dt: string | null) => (dt && dt.length >= 8 ? dt.slice(0, 8) : dt);
-
-// yyyyMMddHHmmss -> yyyy-MM-dd HH:mm:ss (결재이력 표시용, 시분초까지)
-const formatDateTime = (dt: string | null) => {
-  if (!dt || dt.length < 14) return formatDetailDate(dt);
-  return `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)} ${dt.slice(8, 10)}:${dt.slice(10, 12)}:${dt.slice(12, 14)}`;
+const EMPTY_UPDATE_FORM: WorksMyUpdateRequest = {
+  changeTitle: "",
+  changeReason: "",
+  serviceType: "",
+  workType: "",
+  workGubun: "",
+  workLevel: "",
+  workPeriod: "",
+  expectedFinishedDt: "",
+  drsImptYn: "",
+  removeAttachSeqs: [],
 };
+
+// 기본정보 탭: 작업지시서 수정 폼 (104/106 단계의 현재 결재자 = 한전 담당자만 진입 가능)
+const WorkOrderEditSection: React.FC<{
+  detail: WorksMyDetail;
+  onCancel: () => void;
+  onSaved: (updated: WorksMyDetail) => void;
+}> = ({ detail, onCancel, onSaved }) => {
+  const [form, setForm] = useState<WorksMyUpdateRequest>(EMPTY_UPDATE_FORM);
+  const [options, setOptions] = useState<WorksMyCreateOptions | null>(null);
+  const [loadingOptions, setLoadingOptions] = useState(true);
+  const [newFiles, setNewFiles] = useState<File[]>([]);
+  const [removedSeqs, setRemovedSeqs] = useState<Set<string>>(new Set());
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    setForm({
+      changeTitle: detail.changeTitle ?? "",
+      changeReason: detail.changeReason ?? "",
+      serviceType: detail.serviceType ?? "",
+      workType: detail.workType ?? "",
+      workGubun: detail.workGubun ?? "",
+      workLevel: detail.workLevel ?? "",
+      workPeriod: detail.workPeriod ?? "",
+      expectedFinishedDt: detail.expectedFinishedDt ?? "",
+      drsImptYn: detail.drsImptYn ?? "",
+      removeAttachSeqs: [],
+    });
+    setNewFiles([]);
+    setRemovedSeqs(new Set());
+    setError(null);
+    setLoadingOptions(true);
+    fetchCreateOptions()
+      .then(setOptions)
+      .catch(() => setError("수정 폼 옵션을 불러오지 못했습니다."))
+      .finally(() => setLoadingOptions(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detail.workOrderNo]);
+
+  const update = (field: keyof WorksMyUpdateRequest, value: string) => {
+    setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleFileAdd = (files: FileList | null) => {
+    if (!files) return;
+    setNewFiles((prev) => [...prev, ...Array.from(files)]);
+  };
+
+  const handleFileRemove = (index: number) => {
+    setNewFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const toggleRemoveExisting = (seq: string) => {
+    setRemovedSeqs((prev) => {
+      const next = new Set(prev);
+      if (next.has(seq)) next.delete(seq);
+      else next.add(seq);
+      return next;
+    });
+  };
+
+  const handleSubmit = async () => {
+    if (!form.changeTitle.trim() || submitting) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      await updateWorkOrder(
+        detail.workOrderNo,
+        { ...form, removeAttachSeqs: Array.from(removedSeqs) },
+        newFiles,
+      );
+      const updated = await fetchWorkDetail(detail.workOrderNo);
+      onSaved(updated);
+    } catch (e: any) {
+      setError(e.message ?? "작업지시서 수정 중 오류가 발생했습니다.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const codeSelect = (
+    label: string,
+    field: keyof WorksMyUpdateRequest,
+    codeOptions: WorksMyCreateOptions["serviceTypeOptions"] | undefined,
+  ) => (
+    <div className="flex flex-col gap-1.5">
+      <Label>{label}</Label>
+      <Select value={form[field] as string} onValueChange={(v: string) => update(field, v)}>
+        <SelectTrigger className="w-full">
+          <SelectValue placeholder="선택하세요" />
+        </SelectTrigger>
+        <SelectContent>
+          {(codeOptions ?? []).map((opt) => (
+            <SelectItem key={opt.code} value={opt.code}>
+              {opt.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+
+  return (
+    <div className="flex flex-col gap-4">
+      {error && (
+        <div className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-md border border-red-200">
+          {error}
+        </div>
+      )}
+
+      <div className="flex flex-col gap-1.5">
+        <Label>제목</Label>
+        <Input value={form.changeTitle} onChange={(e) => update("changeTitle", e.target.value)} />
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label>지시내용</Label>
+        <Textarea
+          value={form.changeReason}
+          onChange={(e) => update("changeReason", e.target.value)}
+          className="min-h-40"
+        />
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {codeSelect("서비스유형", "serviceType", options?.serviceTypeOptions)}
+        {codeSelect("작업유형", "workType", options?.workTypeOptions)}
+        {codeSelect("작업구분", "workGubun", options?.workGubunOptions)}
+        {codeSelect("작업레벨", "workLevel", options?.workLevelOptions)}
+        {codeSelect("DRS영향", "drsImptYn", options?.drsImptOptions)}
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label>처리기간(일)</Label>
+          <Input
+            type="number"
+            min="0"
+            value={form.workPeriod}
+            onChange={(e) => update("workPeriod", e.target.value)}
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>완료예정일</Label>
+          <Input
+            type="date"
+            value={form.expectedFinishedDt}
+            onChange={(e) => update("expectedFinishedDt", e.target.value)}
+            max="9999-12-31"
+          />
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-1.5">
+        <Label>첨부파일</Label>
+        {detail.attachments.length > 0 && (
+          <ul className="flex flex-col gap-1.5">
+            {detail.attachments.map((att) => {
+              const marked = removedSeqs.has(att.seq);
+              return (
+                <li
+                  key={att.seq}
+                  className={`flex items-center gap-2 border rounded-md px-3 py-2 text-sm ${
+                    marked ? "bg-red-50 border-red-200" : "bg-slate-50 border-slate-200"
+                  }`}
+                >
+                  <span
+                    className={`flex-1 truncate ${
+                      marked ? "line-through text-slate-400" : "text-slate-700"
+                    }`}
+                  >
+                    {att.realFileName}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => toggleRemoveExisting(att.seq)}
+                    className={`text-xs shrink-0 ${
+                      marked ? "text-slate-500 hover:text-slate-700" : "text-red-500 hover:text-red-700"
+                    }`}
+                  >
+                    {marked ? "삭제 취소" : "삭제"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(e) => {
+            handleFileAdd(e.target.files);
+            if (fileInputRef.current) fileInputRef.current.value = "";
+          }}
+        />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => fileInputRef.current?.click()}
+          className="w-fit"
+        >
+          <Paperclip className="size-4" />
+          파일 추가
+        </Button>
+        <div
+          className="border-2 border-dashed border-slate-300 rounded-lg px-4 py-6 text-center text-sm text-slate-500 cursor-pointer hover:border-[var(--sidebar-bg)] hover:text-[var(--sidebar-bg)] hover:bg-slate-50 transition-colors"
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={(e) => e.preventDefault()}
+          onDrop={(e) => {
+            e.preventDefault();
+            handleFileAdd(e.dataTransfer.files);
+          }}
+        >
+          📁 클릭하거나 파일을 여기로 드래그하세요
+        </div>
+        {newFiles.length > 0 && (
+          <ul className="flex flex-col gap-1.5 mt-1">
+            {newFiles.map((file, idx) => (
+              <li
+                key={idx}
+                className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-md px-3 py-2 text-sm"
+              >
+                <span className="flex-1 truncate text-slate-700">{file.name}</span>
+                <span className="text-slate-400 text-xs whitespace-nowrap">
+                  {formatBytes(file.size)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => handleFileRemove(idx)}
+                  className="text-slate-400 hover:text-red-500 transition-colors"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      <div className="flex items-center gap-2 justify-end">
+        <Button variant="outline" onClick={onCancel} disabled={submitting}>
+          취소
+        </Button>
+        <Button
+          className="bg-[var(--sidebar-bg)] hover:bg-[var(--sidebar-bg)]/90 text-white"
+          disabled={submitting || loadingOptions || !form.changeTitle.trim()}
+          onClick={handleSubmit}
+        >
+          저장
+        </Button>
+      </div>
+    </div>
+  );
+};
+
+const formatDetailDate = (dt: string | null) => (dt && dt.length >= 8 ? dt.slice(0, 8) : dt);
 
 // yyyyMMddHHmmss -> yy.MM.dd HH:mm (작성자/승인자 박스 표시용, 초 단위 생략)
 const formatBoxDateTime = (dt: string | null) => {
@@ -380,58 +671,6 @@ const WriterApproverBox: React.FC<{
   );
 };
 
-// 결재 이력(지금까지 거쳐간 승인/반려 처리자 + 시각)을 처리 순서대로 보여주는 타임라인
-const ApprovalHistorySection: React.FC<{ history: WorksMyDetail["approvalHistory"] }> = ({ history }) => {
-  if (!history || history.length === 0) return null;
-  return (
-    <div className="mt-4">
-      <p className="text-sm text-slate-400 mb-1.5 flex items-center gap-1">
-        <HistoryIcon className="size-3.5" />
-        결재 이력
-      </p>
-      <div className="flex flex-col bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-        {history.map((h, idx) => (
-          <div key={idx} className="flex items-start gap-3">
-            <div className="flex flex-col items-center pt-0.5">
-              <span className="flex items-center justify-center w-5 h-5 rounded-full bg-white border border-slate-200 text-slate-500 text-[11px] font-semibold">
-                {idx + 1}
-              </span>
-              {idx < history.length - 1 && (
-                <span className="w-px flex-1 bg-slate-200 mt-1" />
-              )}
-            </div>
-            <div className="pb-3 flex-1">
-              <div className="text-sm">
-                <span className="font-medium text-slate-800">{h.name}</span>
-                <span className="text-slate-400"> · {h.actIdNm}</span>
-                <span
-                  className={
-                    h.signLabel === "반려"
-                      ? "text-red-500 font-medium ml-1"
-                      : h.signLabel === "결재대기"
-                      ? "text-amber-500 font-medium ml-1"
-                      : "text-emerald-600 font-medium ml-1"
-                  }
-                >
-                  {h.signLabel}
-                </span>
-              </div>
-              <div className="text-xs text-slate-400 mt-0.5">
-                {h.regDt ? formatDateTime(h.regDt) : "결재 대기 중"}
-              </div>
-              {h.signLabel === "반려" && h.reason && (
-                <div className="text-xs text-red-500 mt-1 bg-red-50 border border-red-100 rounded px-2 py-1">
-                  반송사유: {h.reason}
-                </div>
-              )}
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
 const WorkDetailModal: React.FC<Props> = ({
   item,
   onClose,
@@ -440,6 +679,7 @@ const WorkDetailModal: React.FC<Props> = ({
   onWorkResultSubmitted,
   onTabChange,
   onDiscussionCreated,
+  onDiscussionsRead,
 }) => {
   const { user } = useAuthContext();
 
@@ -464,6 +704,7 @@ const WorkDetailModal: React.FC<Props> = ({
   const [detail, setDetail] = useState<WorksMyDetail | null>(null);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
+  const [editingOrder, setEditingOrder] = useState(false);
 
   const formatDate = (dt: string) => {
     if (!dt || dt.length < 8) return dt;
@@ -473,6 +714,7 @@ const WorkDetailModal: React.FC<Props> = ({
 
   // 모달이 열릴 때 등록 정보(지시내용/첨부파일/작업결과 등) 상세 로드
   useEffect(() => {
+    setEditingOrder(false);
     if (!item) {
       setDetail(null);
       onDetailLoaded?.(null);
@@ -484,10 +726,6 @@ const WorkDetailModal: React.FC<Props> = ({
       .then((data) => {
         setDetail(data);
         onDetailLoaded?.(data);
-        // 작업결과 보고(109) 이후 단계는 결재자가 조치사항을 반드시 확인하도록 작업완료결재 탭으로 이동시킨다.
-        if (data.currentActId && POST_WORK_RESULT_ACT_IDS.includes(data.currentActId)) {
-          setActiveTab("작업완료결재");
-        }
       })
       .catch(() => setDetailError("상세 정보를 불러오지 못했습니다."))
       .finally(() => setLoadingDetail(false));
@@ -503,17 +741,25 @@ const WorkDetailModal: React.FC<Props> = ({
   // 모달이 열리고 업무협의 탭 진입 시 데이터 로드
   useEffect(() => {
     if (!item || activeTab !== "업무협의") return;
+    const workOrderNo = item.workOrderNo;
     setLoadingDisc(true);
     setDiscError(null);
-    fetchDiscussions(item.workOrderNo)
+    fetchDiscussions(workOrderNo)
       .then((data) => {
         setDiscussions(data);
         if (data.length > 0) {
           setExpandedIds(new Set([data[0].opnId]));
+          // 협의 목록을 실제로 화면에 보여준 시점에, 로그인 사용자 기준으로 일괄 읽음 처리한다.
+          markDiscussionsRead(workOrderNo)
+            .then(() => onDiscussionsRead?.(workOrderNo))
+            .catch(() => {
+              /* 읽음 처리 실패는 화면에 노출하지 않는다 (new! 배지가 계속 뜨는 정도의 부작용만 있음) */
+            });
         }
       })
       .catch(() => setDiscError("협의 목록을 불러오지 못했습니다."))
       .finally(() => setLoadingDisc(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [item?.workOrderNo, activeTab]);
 
   const toggleExpand = (id: string) => {
@@ -577,13 +823,18 @@ const WorkDetailModal: React.FC<Props> = ({
         },
         commentFiles[opnId] ?? [],
       );
-      setDiscussions((prev) =>
-        prev.map((d) =>
+      setDiscussions((prev) => {
+        const updated = prev.map((d) =>
           d.opnId === opnId
             ? { ...d, comments: [...d.comments, comment] }
             : d,
-        ),
-      );
+        );
+        // 댓글(첨부파일 포함)이 새로 등록된 협의는 최신 활동 순 정렬에 맞춰 맨 위로 올린다.
+        const idx = updated.findIndex((d) => d.opnId === opnId);
+        if (idx <= 0) return updated;
+        const [moved] = updated.splice(idx, 1);
+        return [moved, ...updated];
+      });
       setCommentInputs((prev) => ({ ...prev, [opnId]: "" }));
       setCommentFiles((prev) => ({ ...prev, [opnId]: [] }));
     } catch (e) {
@@ -660,6 +911,27 @@ const WorkDetailModal: React.FC<Props> = ({
           {/* 기본 정보 */}
           {activeTab === "기본정보" && item && (
             <div>
+              {detail?.canEdit && !editingOrder && (
+                <div className="flex justify-end mb-3">
+                  <Button size="sm" variant="outline" onClick={() => setEditingOrder(true)}>
+                    <Pencil className="size-3.5" />
+                    작업지시서 수정
+                  </Button>
+                </div>
+              )}
+
+              {editingOrder && detail ? (
+                <WorkOrderEditSection
+                  detail={detail}
+                  onCancel={() => setEditingOrder(false)}
+                  onSaved={(updated) => {
+                    setDetail(updated);
+                    onDetailLoaded?.(updated);
+                    setEditingOrder(false);
+                  }}
+                />
+              ) : (
+                <>
               <div className="grid grid-cols-2 gap-x-8">
               {(
                 [
@@ -696,6 +968,9 @@ const WorkDetailModal: React.FC<Props> = ({
                     ? { label: "처리기간", value: `${detail.workPeriod}일` }
                     : null,
                   { label: "완료예정일", value: formatDate(detail?.expectedFinishedDt || item.dueDt) },
+                  detail?.drsImptLabel
+                    ? { label: "DRS영향", value: detail.drsImptLabel }
+                    : null,
                 ] as ({ label: string; value: string } | null)[]
               )
                 .filter(Boolean)
@@ -758,7 +1033,11 @@ const WorkDetailModal: React.FC<Props> = ({
                 </div>
               )}
 
-              {detail && <ApprovalHistorySection history={detail.approvalHistory} />}
+              <div className="mt-6 pt-4 border-t border-slate-200">
+                <WorkResultSection detail={detail} onSubmitted={onWorkResultSubmitted} />
+              </div>
+                </>
+              )}
             </div>
           )}
 
@@ -796,14 +1075,12 @@ const WorkDetailModal: React.FC<Props> = ({
               {/* 새 협의 입력 폼 */}
               {showNewDiscForm && (
                 <div className="rounded-lg border border-[var(--sidebar-bg)]/30 bg-slate-50 p-3 flex flex-col gap-2">
-                  <input
-                    type="text"
+                  <Textarea
                     placeholder="협의 제목을 입력하세요..."
                     value={newDiscTitle}
                     onChange={(e) => setNewDiscTitle(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleCreateDiscussion()}
                     autoFocus
-                    className="w-full px-3 py-2 text-sm rounded-md border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-[var(--sidebar-bg)]"
+                    className="w-full min-h-[72px] px-3 py-2 text-sm rounded-md border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-[var(--sidebar-bg)]"
                   />
                   <input
                     ref={newDiscFileInputRef}
@@ -815,6 +1092,17 @@ const WorkDetailModal: React.FC<Props> = ({
                       if (newDiscFileInputRef.current) newDiscFileInputRef.current.value = "";
                     }}
                   />
+                  <div
+                    className="border-2 border-dashed border-slate-300 rounded-lg px-3 py-4 text-center text-xs text-slate-500 cursor-pointer hover:border-[var(--sidebar-bg)] hover:text-[var(--sidebar-bg)] hover:bg-white transition-colors"
+                    onClick={() => newDiscFileInputRef.current?.click()}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      handleNewDiscFileAdd(e.dataTransfer.files);
+                    }}
+                  >
+                    📁 클릭하거나 파일을 여기로 드래그하세요
+                  </div>
                   {newDiscFiles.length > 0 && (
                     <ul className="flex flex-col gap-1">
                       {newDiscFiles.map((file, idx) => (
@@ -910,7 +1198,7 @@ const WorkDetailModal: React.FC<Props> = ({
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-start gap-2">
                             <MessageSquare className="size-4 text-slate-400 mt-0.5 shrink-0" />
-                            <span className="text-sm font-medium text-slate-800">
+                            <span className="text-sm font-medium text-slate-800 whitespace-pre-wrap break-words">
                               {disc.opnTitle}
                             </span>
                           </div>
@@ -963,7 +1251,7 @@ const WorkDetailModal: React.FC<Props> = ({
                                         : ""}
                                     </span>
                                   </div>
-                                  <p className="text-sm text-slate-600">
+                                  <p className="text-sm text-slate-600 whitespace-pre-wrap break-words">
                                     {comment.cmntCtt}
                                   </p>
                                   {comment.attachments.length > 0 && (
@@ -995,8 +1283,7 @@ const WorkDetailModal: React.FC<Props> = ({
 
                           {/* 댓글 입력 */}
                           <div className="px-4 pt-3 pb-1 bg-white border-t border-slate-100">
-                            <input
-                              type="text"
+                            <Textarea
                               placeholder="댓글을 입력하세요..."
                               value={commentInput}
                               onChange={(e) =>
@@ -1005,11 +1292,24 @@ const WorkDetailModal: React.FC<Props> = ({
                                   [disc.opnId]: e.target.value,
                                 }))
                               }
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") handleAddComment(disc.opnId);
-                              }}
-                              className="w-full px-3 py-2 text-sm rounded-md border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-[var(--sidebar-bg)]"
+                              className="w-full min-h-[72px] px-3 py-2 text-sm rounded-md border border-slate-200 placeholder:text-slate-400 focus:outline-none focus:border-[var(--sidebar-bg)]"
                             />
+                          </div>
+                          <div className="px-4 pb-1 bg-white">
+                            <div
+                              className="border-2 border-dashed border-slate-300 rounded-lg px-3 py-4 text-center text-xs text-slate-500 cursor-pointer hover:border-[var(--sidebar-bg)] hover:text-[var(--sidebar-bg)] hover:bg-slate-50 transition-colors"
+                              onClick={() => {
+                                setPendingFileOpnId(disc.opnId);
+                                commentFileInputRef.current?.click();
+                              }}
+                              onDragOver={(e) => e.preventDefault()}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                handleCommentFileAdd(disc.opnId, e.dataTransfer.files);
+                              }}
+                            >
+                              📁 클릭하거나 파일을 여기로 드래그하세요
+                            </div>
                           </div>
                           {(commentFiles[disc.opnId] ?? []).length > 0 && (
                             <ul className="px-4 pt-1 flex flex-col gap-1 bg-white">
@@ -1060,11 +1360,6 @@ const WorkDetailModal: React.FC<Props> = ({
                   );
                 })}
             </div>
-          )}
-
-          {/* 작업완료 결재 */}
-          {activeTab === "작업완료결재" && (
-            <WorkResultSection detail={detail} onSubmitted={onWorkResultSubmitted} />
           )}
         </div>
 

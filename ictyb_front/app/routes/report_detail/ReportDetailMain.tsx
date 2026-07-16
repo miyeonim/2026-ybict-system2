@@ -6,6 +6,16 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Pagination,
+  PaginationContent,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import WorkDetailModal from "@routes/common/components/WorkDetailModal";
+import type { WorkDetailItem } from "@routes/common/components/WorkDetailModal";
+import {
   ClipboardList,
   CheckCircle2,
   Settings2,
@@ -38,6 +48,13 @@ interface WorkOrder {
 }
 
 // ─── 유틸 ────────────────────────────────────────────────────────────────────
+
+const GANTT_RANGE_DAYS = 7; // 간트 차트 좌우 표시 일수
+const GANTT_PAGE_SIZE = 10; // 간트 차트 한 페이지당 표시 행 수
+
+// 간트 차트의 #, 지시서, 부서, 작업명, 상태, 시작, 종료, 기간 컬럼 폭 합계(px).
+// 일자별 바 차트의 날짜 열을 간트 차트 날짜 열과 같은 x 위치에 맞추기 위한 오프셋으로도 사용.
+const GANTT_LABEL_WIDTH = 24 + 128 + 56 + 144 + 56 + 56 + 56 + 56;
 
 function addDays(date: Date, days: number): Date {
   const d = new Date(date);
@@ -90,6 +107,19 @@ function toWorkOrder(dto: import("@/hooks/report_detail/type").ReportDetailDto, 
     status: normalizeStatus(dto.status),
     assignee: dto.approval, // 백엔드에 assignee 필드 없음 → approval로 표시
     approval: dto.approval,
+  };
+}
+
+// code(=INST_ID)를 workOrderNo로 그대로 사용해 WorkDetailModal이 상세를 재조회하도록 한다.
+function toWorkDetailItem(order: WorkOrder): WorkDetailItem {
+  return {
+    workOrderNo: order.code,
+    title: order.name,
+    department: order.department,
+    dueDt: formatDateFull(order.endDate),
+    status: order.status,
+    approvalStatus: order.approval,
+    managerName: order.assignee,
   };
 }
 
@@ -290,14 +320,14 @@ function GanttRow({
       onClick={() => onSelect(order)}
     >
       <td className="px-2 py-1.5 text-muted-foreground w-6">{order.id}</td>
-      <td className="px-2 py-1.5 font-medium text-[#3A6499] w-14">{order.code}</td>
+      <td className="px-2 py-1.5 font-medium text-[#3A6499] w-32 whitespace-nowrap">{order.code}</td>
       <td className="px-2 py-1.5 w-14">
         <Badge variant="outline" className="text-[10px] scale-90">{order.department}</Badge>
       </td>
       <td className="px-2 py-1.5 font-medium w-36 truncate max-w-[144px]">{order.name}</td>
-      <td className="px-2 py-1.5 w-20">
+      <td className="px-2 py-1.5 w-14">
         <span className={`font-semibold ${
-          order.status === "완료" ? "text-[#3A6080]" : 
+          order.status === "완료" ? "text-[#3A6080]" :
           order.status === "미완료" ? "text-[#7AAAC8]" : "text-gray-500"
         }`}>
           {order.status}
@@ -305,7 +335,7 @@ function GanttRow({
       </td>
       <td className="px-2 py-1.5 text-muted-foreground w-14">{formatDateFull(order.startDate).slice(5)}</td>
       <td className="px-2 py-1.5 text-muted-foreground w-14">{formatDateFull(order.endDate).slice(5)}</td>
-      <td className="px-2 py-1.5 text-center w-8">{order.duration}</td>
+      <td className="px-2 py-1.5 text-center w-14">{order.duration}</td>
       
       {dates.map((d, colIdx) => {
         const ts = d.getTime();
@@ -382,17 +412,42 @@ export default function ReportDetailMain() {
   const [showCalendar, setShowCalendar] = useState(false);
   const [deptTab, setDeptTab] = useState<DeptTab>("전체");
   const [selected, setSelected] = useState<WorkOrder | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
 
   const [allOrders, setAllOrders] = useState<WorkOrder[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // 일자별 바 차트 ↔ 간트 차트 가로 스크롤 연동 (날짜 열 위치를 계속 맞추기 위함)
+  const barScrollRef = useRef<HTMLDivElement>(null);
+  const ganttScrollRef = useRef<HTMLDivElement>(null);
+  const isSyncingScroll = useRef(false);
+
+  const handleBarScroll = () => {
+    if (isSyncingScroll.current) return;
+    isSyncingScroll.current = true;
+    if (ganttScrollRef.current && barScrollRef.current) {
+      ganttScrollRef.current.scrollLeft = barScrollRef.current.scrollLeft;
+    }
+    isSyncingScroll.current = false;
+  };
+
+  const handleGanttScroll = () => {
+    if (isSyncingScroll.current) return;
+    isSyncingScroll.current = true;
+    if (barScrollRef.current && ganttScrollRef.current) {
+      barScrollRef.current.scrollLeft = ganttScrollRef.current.scrollLeft;
+    }
+    isSyncingScroll.current = false;
+  };
 
   const fetchOrders = useCallback(async (centerDate: Date) => {
     setIsLoading(true);
     setError(null);
     try {
-      const rangeStart = addDays(centerDate, -15);
-      const rangeEnd   = addDays(centerDate, 15);
+      const rangeStart = addDays(centerDate, -GANTT_RANGE_DAYS);
+      const rangeEnd   = addDays(centerDate, GANTT_RANGE_DAYS);
       const fmt = (d: Date) =>
         `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
       const dtos = await getReportDetail(fmt(rangeStart), fmt(rangeEnd));
@@ -409,13 +464,45 @@ export default function ReportDetailMain() {
     fetchOrders(baseDate);
   }, [baseDate, fetchOrders]);
 
-  const dates: Date[] = Array.from({ length: 31 }, (_, i) =>
-    addDays(baseDate, i - 15)
+  const dates: Date[] = Array.from({ length: GANTT_RANGE_DAYS * 2 + 1 }, (_, i) =>
+    addDays(baseDate, i - GANTT_RANGE_DAYS)
   );
 
   const filteredOrders = allOrders.filter(
     (o) => deptTab === "전체" || o.department === deptTab
   );
+
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / GANTT_PAGE_SIZE));
+
+  const pagedOrders = filteredOrders.slice(
+    (currentPage - 1) * GANTT_PAGE_SIZE,
+    currentPage * GANTT_PAGE_SIZE
+  );
+
+  // 부서 탭이나 기준일이 바뀌어 목록이 달라지면 1페이지로 복귀
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [deptTab, baseDate]);
+
+  // 필터링 결과가 줄어들어 현재 페이지가 범위를 벗어나면 마지막 페이지로 보정
+  useEffect(() => {
+    if (currentPage > totalPages) setCurrentPage(totalPages);
+  }, [currentPage, totalPages]);
+
+  // 현재 페이지 주변 ±2 페이지 + 처음/끝 페이지만 노출, 나머지는 생략(...) 처리
+  const getPageNumbers = (page: number, total: number): (number | "ellipsis")[] => {
+    if (total <= 7) return Array.from({ length: total }, (_, i) => i + 1);
+    const pages = new Set<number>([1, total, page - 1, page, page + 1]);
+    const sorted = Array.from(pages)
+      .filter((p) => p >= 1 && p <= total)
+      .sort((a, b) => a - b);
+    const result: (number | "ellipsis")[] = [];
+    sorted.forEach((p, i) => {
+      if (i > 0 && p - sorted[i - 1] > 1) result.push("ellipsis");
+      result.push(p);
+    });
+    return result;
+  };
 
   const total = filteredOrders.length;
   const done = filteredOrders.filter((o) => o.status === "완료").length;
@@ -438,7 +525,7 @@ export default function ReportDetailMain() {
       ? (filteredOrders.reduce((s, o) => s + Number(o.duration), 0) / filteredOrders.length).toFixed(1)
       : "0";
 
-  const todayIndex = 15;
+  const todayIndex = GANTT_RANGE_DAYS;
 
   const SUMMARY_STATS = [
     { icon: ClipboardList, value: `${total} 건`, label: "전체 작업지시서", highlight: false },
@@ -453,8 +540,8 @@ export default function ReportDetailMain() {
     setSelected(order);
   };
 
-  const rangeStart = addDays(baseDate, -15);
-  const rangeEnd = addDays(baseDate, 15);
+  const rangeStart = addDays(baseDate, -GANTT_RANGE_DAYS);
+  const rangeEnd = addDays(baseDate, GANTT_RANGE_DAYS);
   const fmtRange = (d: Date) => `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;
 
   return (
@@ -473,7 +560,7 @@ export default function ReportDetailMain() {
             <span>{fmtRange(rangeStart)}</span>
             <span className="text-muted-foreground">~</span>
             <span>{fmtRange(rangeEnd)}</span>
-            <span className="text-xs text-muted-foreground ml-1">(오늘 기준 ±15일)</span>
+            <span className="text-xs text-muted-foreground ml-1">(오늘 기준 ±{GANTT_RANGE_DAYS}일)</span>
           </button>
           {showCalendar && (
             <DatePickerPopover
@@ -545,7 +632,11 @@ export default function ReportDetailMain() {
                 막대 높이 = 해당 일자에 동시 진행 중인 작업지시서 수
               </p>
             </CardHeader>
-            <CardContent className="pb-4 pt-2 overflow-x-auto">
+            <CardContent
+                ref={barScrollRef}
+                onScroll={handleBarScroll}
+                className="px-0 pb-4 pt-2 overflow-x-auto"
+            >
                 <div
                 style={{
                     display:"grid",
@@ -553,6 +644,7 @@ export default function ReportDetailMain() {
                     width:`${dates.length * 48}px`,
                     height:"230px",
                     position:"relative",
+                    marginLeft:`${GANTT_LABEL_WIDTH}px`,
                 }}
                 >
 
@@ -661,12 +753,16 @@ export default function ReportDetailMain() {
                 </CardTitle>
                 <GanttLegend />
               </CardHeader>
-              <CardContent className="p-0 overflow-x-auto">
-                <table className="border-collapse" style={{ width: `${6 * 80 + dates.length * 48}px`, minWidth: `${6 * 80 + dates.length * 48}px`, tableLayout: "fixed" }}>
+              <CardContent
+                ref={ganttScrollRef}
+                onScroll={handleGanttScroll}
+                className="p-0 overflow-x-auto"
+              >
+                <table className="border-collapse" style={{ width: `${GANTT_LABEL_WIDTH + dates.length * 48}px`, minWidth: `${GANTT_LABEL_WIDTH + dates.length * 48}px`, tableLayout: "fixed" }}>
                   <thead>
                     <tr className="border-b border-border bg-slate-50">
                       <th className="px-2 py-2 text-left w-6 text-xs text-muted-foreground font-normal">#</th>
-                      <th className="px-2 py-2 text-left w-20 text-xs text-muted-foreground font-normal">지시서</th>
+                      <th className="px-2 py-2 text-left w-32 text-xs text-muted-foreground font-normal">지시서</th>
                       <th className="px-2 py-2 text-left w-14 text-xs text-muted-foreground font-normal">부서</th>
                       <th className="px-2 py-2 text-left w-36 text-xs text-muted-foreground font-normal">작업명</th>
                       <th className="px-2 py-2 text-left w-14 text-xs text-muted-foreground font-normal">상태</th>
@@ -705,7 +801,7 @@ export default function ReportDetailMain() {
                         </td>
                       </tr>
                     ) : (
-                      filteredOrders.map((order) => (
+                      pagedOrders.map((order) => (
                         <GanttRow
                           key={order.id}
                           order={order}
@@ -720,6 +816,60 @@ export default function ReportDetailMain() {
                   </tbody>
                 </table>
               </CardContent>
+
+              {filteredOrders.length > 0 && (
+                <div className="px-4 pb-3 pt-1 border-t border-border/60">
+                  <div className="text-right text-[11px] text-muted-foreground mb-1">
+                    총 {filteredOrders.length}건
+                  </div>
+                  <Pagination>
+                    <PaginationContent>
+                      <PaginationItem>
+                        <PaginationPrevious
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (currentPage > 1) setCurrentPage(currentPage - 1);
+                          }}
+                          aria-disabled={currentPage === 1}
+                          className={currentPage === 1 ? "pointer-events-none opacity-40" : ""}
+                        />
+                      </PaginationItem>
+                      {getPageNumbers(currentPage, totalPages).map((p, idx) =>
+                        p === "ellipsis" ? (
+                          <PaginationItem key={`ellipsis-${idx}`}>
+                            <span className="px-2 text-slate-400">...</span>
+                          </PaginationItem>
+                        ) : (
+                          <PaginationItem key={p}>
+                            <PaginationLink
+                              href="#"
+                              isActive={p === currentPage}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                setCurrentPage(p);
+                              }}
+                            >
+                              {p}
+                            </PaginationLink>
+                          </PaginationItem>
+                        )
+                      )}
+                      <PaginationItem>
+                        <PaginationNext
+                          href="#"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            if (currentPage < totalPages) setCurrentPage(currentPage + 1);
+                          }}
+                          aria-disabled={currentPage === totalPages}
+                          className={currentPage === totalPages ? "pointer-events-none opacity-40" : ""}
+                        />
+                      </PaginationItem>
+                    </PaginationContent>
+                  </Pagination>
+                </div>
+              )}
             </Card>
 
             {/* 선택한 작업 정보 */}
@@ -787,6 +937,7 @@ export default function ReportDetailMain() {
                     <Button
                       className="w-full text-xs h-8"
                       style={{ backgroundColor: "#1C2D4F" }}
+                      onClick={() => setDetailOpen(true)}
                     >
                       상세보기
                     </Button>
@@ -803,6 +954,17 @@ export default function ReportDetailMain() {
             </Card>
           </div>
       </div>
+
+      <WorkDetailModal
+        key={selected?.code}
+        item={detailOpen && selected ? toWorkDetailItem(selected) : null}
+        onClose={() => setDetailOpen(false)}
+        footer={
+          <Button variant="outline" onClick={() => setDetailOpen(false)}>
+            닫기
+          </Button>
+        }
+      />
     </div>
   );
 }

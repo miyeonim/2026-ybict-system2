@@ -6,6 +6,7 @@ export interface JwtUserDto {
   parDepId: string;
   depTitle: string;
   kepcoMap: string;
+  kepcoYn: string;
 }
 
 export interface LoginResponse {

@@ -8,6 +8,17 @@ import { COLOR } from "@hooks/work_part/type";
 import type { AlertItem } from "@hooks/report_total/types";
 // ─── API ───────────────────────────────────────────────────────
 import { fetchLongAlerts, fetchDueAlerts } from "@/hooks/work_part/WorkPartController";
+import WorkDetailModal from "@routes/common/components/WorkDetailModal";
+import type { WorkDetailItem } from "@routes/common/components/WorkDetailModal";
+
+// 알림 항목(AlertItem)은 부서/제목/경과일 정도만 담고 있으므로,
+// 나머지 상세(지시내용/첨부파일/협의/결재 이력 등)는 모달이 workOrderNo로 다시 조회한다.
+const toWorkDetailItem = (item: AlertItem): WorkDetailItem => ({
+  workOrderNo: item.instId ?? "",
+  title: item.title,
+  department: item.dept,
+  dueDt: "",
+});
 
 /* ────────────────────────────────────────────────────────────────────────
  * 📌 부서 필터 규칙
@@ -133,12 +144,14 @@ function SectionHeader({ emoji, title, total, page, totalPages, onPrev, onNext, 
 // ─── 장기 미처리 아이템 ──────────────────────────────────────────
 interface LongItemCardProps {
   readonly item: AlertItem;
+  readonly onClick: () => void;
 }
 
-function LongItemCard({ item }: LongItemCardProps) {
+function LongItemCard({ item, onClick }: LongItemCardProps) {
   return (
     <div
-      className="flex justify-between items-center px-3 py-2.5 rounded-xl transition-colors"
+      onClick={onClick}
+      className="flex justify-between items-center px-3 py-2.5 rounded-xl transition-colors cursor-pointer hover:brightness-95"
       style={{ background: "#F8FAFD", border: "1px solid #E8EEF6" }}
     >
       {/* 왼쪽: 부서 + 제목 */}
@@ -165,12 +178,14 @@ function LongItemCard({ item }: LongItemCardProps) {
 // ─── 마감 임박 아이템 ────────────────────────────────────────────
 interface DueItemCardProps {
   readonly item: AlertItem;
+  readonly onClick: () => void;
 }
 
-function DueItemCard({ item }: DueItemCardProps) {
+function DueItemCard({ item, onClick }: DueItemCardProps) {
   return (
     <div
-      className="flex justify-between items-center px-3 py-2.5 rounded-xl transition-colors"
+      onClick={onClick}
+      className="flex justify-between items-center px-3 py-2.5 rounded-xl transition-colors cursor-pointer hover:brightness-95"
       style={{ background: "#FFF8F8", border: "1px solid #FADDDD" }}
     >
       {/* 왼쪽: 부서 + 제목 */}
@@ -213,6 +228,9 @@ export default function AlertPanel({ deptFilter, year, sabun }: AlertPanelProps)
   // 마감 임박 State
   const [duePage, setDuePage] = useState(1);
   const [dueData, setDueData] = useState({ items: [] as AlertItem[], total: 0, totalPages: 1 });
+
+  // 클릭한 알림 항목의 상세 모달 State
+  const [detailItem, setDetailItem] = useState<AlertItem | null>(null);
 
   const handleDeptChange = (key: DeptKey) => {
     if (!isControlled) setInternalDeptTab(key);
@@ -278,7 +296,9 @@ export default function AlertPanel({ deptFilter, year, sabun }: AlertPanelProps)
             />
             <div className="flex flex-col gap-1.5" style={{ minHeight: "150px" }}>
               {longData.items.length > 0 ? (
-                longData.items.map((item, i) => <LongItemCard key={`${item.instId || i}`} item={item} />)
+                longData.items.map((item, i) => (
+                  <LongItemCard key={`${item.instId || i}`} item={item} onClick={() => setDetailItem(item)} />
+                ))
               ) : (
                 <EmptyState />
               )}
@@ -302,7 +322,9 @@ export default function AlertPanel({ deptFilter, year, sabun }: AlertPanelProps)
             {/* 카드에 값이 없어도 크기 고정하기 */}
             <div className="flex flex-col gap-1.5" style={{ minHeight: "150px" }}>
               {dueData.items.length > 0 ? (
-                dueData.items.map((item, i) => <DueItemCard key={`${item.instId || i}`} item={item} />)
+                dueData.items.map((item, i) => (
+                  <DueItemCard key={`${item.instId || i}`} item={item} onClick={() => setDetailItem(item)} />
+                ))
               ) : (
                 <EmptyState />
               )}
@@ -310,6 +332,17 @@ export default function AlertPanel({ deptFilter, year, sabun }: AlertPanelProps)
           </CardContent>
         </Card>
       </div>
+
+      <WorkDetailModal
+        key={detailItem?.instId}
+        item={detailItem ? toWorkDetailItem(detailItem) : null}
+        onClose={() => setDetailItem(null)}
+        footer={
+          <Button variant="outline" onClick={() => setDetailItem(null)}>
+            닫기
+          </Button>
+        }
+      />
     </div>
   );
 }

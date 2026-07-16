@@ -5,6 +5,7 @@ import type {
   WorksMyApprovalStatus,
   WorksMyTabKey,
   WorksMyCandidate,
+  WorksMyReturnTarget,
   WorksMyCreateOptions,
   WorksMyCreateRequest,
   WorksMyDetail,
@@ -13,9 +14,11 @@ import {
   fetchWorksMyList,
   fetchNextCandidates,
   submitApproval,
+  fetchReturnTargets,
   submitReturn,
   fetchCreateOptions,
   fetchInitialApproverCandidates,
+  fetchReservedWorkOrderNo,
   createWorkOrder,
 } from "~/hooks/work_my/WorksMyController";
 
@@ -45,8 +48,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import WorkDetailModal, { POST_WORK_RESULT_ACT_IDS } from "@routes/common/components/WorkDetailModal";
-import type { WorkDetailItem, ModalTab } from "@routes/common/components/WorkDetailModal";
+import WorkDetailModal from "@routes/common/components/WorkDetailModal";
+import type { WorkDetailItem } from "@routes/common/components/WorkDetailModal";
 import {
   ClipboardCheck,
   MessageSquareText,
@@ -79,16 +82,16 @@ const TAB_CONFIG: {
   icon: React.ElementType;
 }[] = [
   { key: "결재대기", label: "결재대기", icon: ClipboardCheck },
-  { key: "피드백", label: "피드백", icon: MessageSquareText },
+  { key: "협의", label: "협의", icon: MessageSquareText },
   { key: "진행중", label: "진행중", icon: Activity },
   { key: "처리내역", label: "처리내역", icon: CheckCircle2 },
 ];
 
-/** 결재대기와 피드백은 동시에 해당될 수 있어(예: 내 결재 차례인데 협의도 걸린 건) 한 건이 여러 탭에 함께 표시된다. */
+/** 결재대기와 협의는 동시에 해당될 수 있어(예: 내 결재 차례인데 협의도 걸린 건) 한 건이 여러 탭에 함께 표시된다. */
 const resolveTabs = (item: WorksMyListItem): WorksMyTabKey[] => {
   const tabs: WorksMyTabKey[] = [];
   if (item.approvalStatus === "결재 대기") tabs.push("결재대기");
-  if (item.status === "협의") tabs.push("피드백");
+  if (item.status === "협의") tabs.push("협의");
   if (tabs.length > 0) return tabs;
   if (item.status === "완료") return ["처리내역"];
   return ["진행중"];
@@ -104,6 +107,12 @@ const DotBadge: React.FC<{ label: string; color: string }> = ({
       style={{ backgroundColor: color }}
     />
     {label}
+  </span>
+);
+
+const NewBadge: React.FC = () => (
+  <span className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-bold bg-red-500 text-white mr-1.5 align-middle">
+    new!
   </span>
 );
 
@@ -331,29 +340,41 @@ const ApproveDialog: React.FC<{
   );
 };
 
-// 반려(반송): 이전 단계로 되돌리며 사유를 입력받는 다이얼로그
+// 반려(반송): 되돌아갈 결재 단계를 선택하고 사유를 입력받는 다이얼로그
 const ReturnDialog: React.FC<{
   open: boolean;
   workOrderNo: string | null;
   onClose: () => void;
   onConfirmed: (workOrderNo: string) => void;
 }> = ({ open, workOrderNo, onClose, onConfirmed }) => {
+  const [targets, setTargets] = useState<WorksMyReturnTarget[]>([]);
+  const [selectedActId, setSelectedActId] = useState<string>("");
   const [reason, setReason] = useState("");
+  const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || !workOrderNo) return;
     setReason("");
+    setSelectedActId("");
     setError(null);
-  }, [open]);
+    setLoading(true);
+    fetchReturnTargets(workOrderNo)
+      .then((res) => {
+        setTargets(res.targets);
+        setSelectedActId(res.targets[0]?.actId ?? "");
+      })
+      .catch((e: any) => setError(e.message ?? "반송 대상 단계 조회에 실패했습니다."))
+      .finally(() => setLoading(false));
+  }, [open, workOrderNo]);
 
   const handleConfirm = async () => {
-    if (!workOrderNo || !reason.trim()) return;
+    if (!workOrderNo || !reason.trim() || !selectedActId) return;
     setSubmitting(true);
     setError(null);
     try {
-      await submitReturn(workOrderNo, reason.trim());
+      await submitReturn(workOrderNo, reason.trim(), selectedActId);
       onConfirmed(workOrderNo);
     } catch (e: any) {
       setError(e.message ?? "반송 처리 중 오류가 발생했습니다.");
@@ -370,6 +391,37 @@ const ReturnDialog: React.FC<{
         {error && (
           <div className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-md border border-red-200">
             {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="text-center py-8 text-sm text-slate-400">
+            <span className="inline-block w-4 h-4 border-2 border-slate-300 border-t-[var(--sidebar-bg)] rounded-full animate-spin mr-2 align-middle" />
+            반송 대상 단계를 불러오는 중...
+          </div>
+        ) : (
+          <div className="flex flex-col gap-2 py-2">
+            <p className="text-xs text-slate-500">되돌아갈 결재 단계를 선택하세요.</p>
+            <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
+              {targets.map((t) => (
+                <button
+                  key={t.actId}
+                  onClick={() => setSelectedActId(t.actId)}
+                  className={`text-left px-3 py-2 rounded-md border text-sm transition-colors ${
+                    selectedActId === t.actId
+                      ? "border-[var(--sidebar-bg)] bg-[var(--sidebar-bg)]/5"
+                      : "border-slate-200 hover:border-slate-300"
+                  }`}
+                >
+                  <span className="font-medium text-slate-800">{t.actIdNm}</span>
+                  {t.name && (
+                    <span className="text-slate-400 ml-2 text-xs">
+                      {t.name} · {t.sabun}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
           </div>
         )}
 
@@ -390,7 +442,7 @@ const ReturnDialog: React.FC<{
           <Button
             variant="outline"
             className="text-red-500 border-red-200 hover:bg-red-50"
-            disabled={submitting || !reason.trim()}
+            disabled={submitting || loading || !reason.trim() || !selectedActId}
             onClick={handleConfirm}
           >
             <XCircle className="size-4" />
@@ -429,6 +481,7 @@ const calcExpectedFinishedDt = (periodDays: string): string | null => {
 };
 
 const EMPTY_CREATE_FORM: WorksMyCreateRequest = {
+  workOrderNo: "",
   changeTitle: "",
   changeReason: "",
   serviceType: "",
@@ -437,6 +490,7 @@ const EMPTY_CREATE_FORM: WorksMyCreateRequest = {
   workLevel: "",
   workPeriod: "",
   expectedFinishedDt: "",
+  drsImptYn: "",
   initialApproverSabun: "",
   initialApproverName: "",
 };
@@ -462,10 +516,15 @@ const CreateWorkOrderDialog: React.FC<{
     setAttachments([]);
     setError(null);
     setLoading(true);
-    Promise.all([fetchCreateOptions(), fetchInitialApproverCandidates()])
-      .then(([opts, cands]) => {
+    Promise.all([
+      fetchCreateOptions(),
+      fetchInitialApproverCandidates(),
+      fetchReservedWorkOrderNo(),
+    ])
+      .then(([opts, cands, workOrderNo]) => {
         setOptions(opts);
         setCandidates(cands);
+        setForm((prev) => ({ ...prev, workOrderNo }));
       })
       .catch((e: any) =>
         setError(e.message ?? "등록 폼 정보를 불러오지 못했습니다."),
@@ -529,7 +588,10 @@ const CreateWorkOrderDialog: React.FC<{
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-6xl sm:max-w-6xl max-h-[95vh] overflow-y-auto">
-        <DialogTitle>업무지시서 등록</DialogTitle>
+        <div className="text-xs font-medium text-slate-400">
+          등록번호 {form.workOrderNo || "발급 중..."}
+        </div>
+        <DialogTitle>작업지시서 등록</DialogTitle>
 
         {error && (
           <div className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-md border border-red-200">
@@ -544,30 +606,12 @@ const CreateWorkOrderDialog: React.FC<{
           </div>
         ) : (
           <div className="flex flex-col gap-4 py-2">
-            <div className="flex flex-col gap-1.5">
-              <Label>제목</Label>
-              <Input
-                value={form.changeTitle}
-                onChange={(e) => update("changeTitle", e.target.value)}
-                placeholder="지시 제목을 입력하세요"
-              />
-            </div>
-
-            <div className="flex flex-col gap-1.5">
-              <Label>지시내용</Label>
-              <Textarea
-                value={form.changeReason}
-                onChange={(e) => update("changeReason", e.target.value)}
-                placeholder="지시 내용을 입력하세요"
-                className="min-h-60"
-              />
-            </div>
-
             <div className="grid grid-cols-2 gap-3">
               {codeSelect("서비스유형", "serviceType", options?.serviceTypeOptions)}
               {codeSelect("작업유형", "workType", options?.workTypeOptions)}
               {codeSelect("작업구분", "workGubun", options?.workGubunOptions)}
               {codeSelect("작업레벨", "workLevel", options?.workLevelOptions)}
+              {codeSelect("DRS영향", "drsImptYn", options?.drsImptOptions)}
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -602,6 +646,25 @@ const CreateWorkOrderDialog: React.FC<{
             </div>
 
             <div className="flex flex-col gap-1.5">
+              <Label>제목</Label>
+              <Input
+                value={form.changeTitle}
+                onChange={(e) => update("changeTitle", e.target.value)}
+                placeholder="지시 제목을 입력하세요"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label>지시내용</Label>
+              <Textarea
+                value={form.changeReason}
+                onChange={(e) => update("changeReason", e.target.value)}
+                placeholder="지시 내용을 입력하세요"
+                className="min-h-60"
+              />
+            </div>
+
+            <div className="flex flex-col gap-1.5">
               <Label>첨부파일</Label>
               <Button
                 type="button"
@@ -619,6 +682,17 @@ const CreateWorkOrderDialog: React.FC<{
                 className="hidden"
                 onChange={(e) => handleFileAdd(e.target.files)}
               />
+              <div
+                className="border-2 border-dashed border-slate-300 rounded-lg px-4 py-6 text-center text-sm text-slate-500 cursor-pointer hover:border-[var(--sidebar-bg)] hover:text-[var(--sidebar-bg)] hover:bg-slate-50 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={(e) => {
+                  e.preventDefault();
+                  handleFileAdd(e.dataTransfer.files);
+                }}
+              >
+                📁 클릭하거나 파일을 여기로 드래그하세요
+              </div>
               {attachments.length > 0 && (
                 <ul className="flex flex-col gap-1.5 mt-1">
                   {attachments.map((file, idx) => (
@@ -705,7 +779,6 @@ const WorksMyMain: React.FC = () => {
   const [selectedTab, setSelectedTab] = useState<WorksMyTabKey>("결재대기");
   const [detailItem, setDetailItem] = useState<WorksMyListItem | null>(null);
   const [currentDetail, setCurrentDetail] = useState<WorksMyDetail | null>(null);
-  const [currentModalTab, setCurrentModalTab] = useState<ModalTab>("기본정보");
   const [approveDialogOpen, setApproveDialogOpen] = useState(false);
   const [returnDialogOpen, setReturnDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -736,7 +809,7 @@ const WorksMyMain: React.FC = () => {
   const tabCounts = useMemo(() => {
     const counts: Record<WorksMyTabKey, number> = {
       결재대기: 0,
-      피드백: 0,
+      협의: 0,
       진행중: 0,
       처리내역: 0,
     };
@@ -747,6 +820,12 @@ const WorksMyMain: React.FC = () => {
     });
     return counts;
   }, [itemsWithTabs]);
+
+  // 아직 확인하지 않은 협의(신규 등록/댓글)가 하나라도 있으면 협의 탭에 new! 배지를 띄운다.
+  const hasUnreadDiscussion = useMemo(
+    () => list.some((item) => item.status === "협의" && item.hasUnreadDiscussion),
+    [list],
+  );
 
   const filteredList = useMemo(
     () =>
@@ -766,14 +845,8 @@ const WorksMyMain: React.FC = () => {
     setReturnDialogOpen(false);
     setDetailItem(null);
     setCurrentDetail(null);
-    setCurrentModalTab("기본정보");
     loadList();
   };
-
-  // 작업결과 보고(109) 이후 단계는 결재자가 작업완료결재 탭에서 조치사항을 확인해야만 승인/반려 버튼을 누를 수 있다.
-  const requiresWorkResultReview =
-    !!currentDetail?.currentActId && POST_WORK_RESULT_ACT_IDS.includes(currentDetail.currentActId);
-  const decisionBlockedByTab = requiresWorkResultReview && currentModalTab !== "작업완료결재";
 
   const renderTableBody = () => {
     if (loading) {
@@ -807,6 +880,10 @@ const WorksMyMain: React.FC = () => {
           {item.workOrderNo}
         </TableCell>
         <TableCell className="font-medium text-[var(--sidebar-bg)]">
+          {item.returnedToMe && (
+            <span className="text-red-600 mr-1">[반송]</span>
+          )}
+          {selectedTab === "협의" && item.hasUnreadDiscussion && <NewBadge />}
           {item.title}
         </TableCell>
         <TableCell className="text-center">
@@ -860,12 +937,17 @@ const WorksMyMain: React.FC = () => {
           <button
             key={key}
             onClick={() => setSelectedTab(key)}
-            className={`text-left p-4 rounded-xl border bg-white transition-colors ${
+            className={`relative text-left p-4 rounded-xl border bg-white transition-colors ${
               selectedTab === key
                 ? "border-[var(--sidebar-bg)] shadow-sm"
                 : "border-slate-200 hover:border-slate-300"
             }`}
           >
+            {key === "협의" && hasUnreadDiscussion && (
+              <span className="absolute top-2 right-2">
+                <NewBadge />
+              </span>
+            )}
             <div className="text-3xl font-bold text-[var(--sidebar-bg)]">
               {tabCounts[key]}
             </div>
@@ -931,8 +1013,8 @@ const WorksMyMain: React.FC = () => {
         onClose={() => setDetailItem(null)}
         onDetailLoaded={setCurrentDetail}
         onWorkResultSubmitted={handleDecisionConfirmed}
-        onTabChange={setCurrentModalTab}
         onDiscussionCreated={loadList}
+        onDiscussionsRead={loadList}
         footer={
           detailItem?.approvalStatus === "결재 대기" ? (
             currentDetail?.currentActId === "109" ? (
@@ -947,7 +1029,7 @@ const WorksMyMain: React.FC = () => {
                   반려
                 </Button>
                 <span className="text-xs text-slate-400 self-center">
-                  작업완료 결재 탭에서 조치사항을 작성해 제출하세요.
+                  조치사항을 작성해 제출하세요.
                 </span>
               </>
             ) : (
@@ -956,12 +1038,6 @@ const WorksMyMain: React.FC = () => {
                   size="lg"
                   variant="outline"
                   className="h-11 px-6 text-base text-red-500 border-red-200 hover:bg-red-50"
-                  disabled={decisionBlockedByTab}
-                  title={
-                    decisionBlockedByTab
-                      ? "작업완료 결재 탭에서 조치사항을 확인한 후 반려할 수 있습니다."
-                      : undefined
-                  }
                   onClick={() => setReturnDialogOpen(true)}
                 >
                   <XCircle className="size-5" />
@@ -970,12 +1046,6 @@ const WorksMyMain: React.FC = () => {
                 <Button
                   size="lg"
                   className="h-11 px-6 text-base bg-[var(--sidebar-bg)] hover:bg-[var(--sidebar-bg)]/90 text-white"
-                  disabled={decisionBlockedByTab}
-                  title={
-                    decisionBlockedByTab
-                      ? "작업완료 결재 탭에서 조치사항을 확인한 후 승인할 수 있습니다."
-                      : undefined
-                  }
                   onClick={() => setApproveDialogOpen(true)}
                 >
                   <CheckCircle className="size-5" />
