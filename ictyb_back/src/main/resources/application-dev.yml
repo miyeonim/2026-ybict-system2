@@ -17,7 +17,7 @@ cors:
 
 # 🌟 파일 업로드 경로 설정 (spring 블록 외부)
 file:
-  upload-dir: ./uploads/qna
-  report-daily-upload-dir: ./uploads/report_daily
-  work-my-upload-dir: ./uploads/work_my
-  work-opinion-upload-dir: ./uploads/work_opinion
+  upload-dir: /home/appuser/ictyb/uploads/qna
+  report-daily-upload-dir: /home/appuser/ictyb/uploads/report_daily
+  work-my-upload-dir: /home/appuser/ictyb/uploads/work_my
+  work-opinion-upload-dir: /home/appuser/ictyb/uploads/work_opinion
