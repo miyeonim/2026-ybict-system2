@@ -23,7 +23,8 @@ public class SecurityConfig {
                     "/v3/api-docs/**",
                     "/api-docs/**",
                     "/swagger-resources/**",
-                    "/webjars/**"
+                    "/webjars/**",
+                    "/api/auth/**"          // 로그인/로그아웃/refresh/sso-login 은 인증 없이 접근
                 ).permitAll()
                 .anyRequest().permitAll() 
             );

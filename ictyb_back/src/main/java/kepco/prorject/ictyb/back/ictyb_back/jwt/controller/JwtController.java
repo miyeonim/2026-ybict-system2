@@ -71,10 +71,10 @@ public class JwtController {
 
         if (result.isSuccess()) {
             // 2. 쿠키 생성
-            Cookie cookie = new Cookie("token", result.getAccessToken());
+            Cookie cookie = new Cookie("accessToken", result.getAccessToken());
             cookie.setHttpOnly(true); // 자바스크립트에서 접근 불가 (보안)
             cookie.setPath("/");
-            cookie.setMaxAge(60 * 60 * 24); // 1일
+            cookie.setMaxAge(60 * 30); // 30분
             response.addCookie(cookie); // 3. 응답에 쿠키 추가
         }
     
@@ -91,15 +91,15 @@ public class JwtController {
     @Operation(summary = "로그인 정보 조회", description = "쿠키의 토큰으로부터 사용자 정보를 반환합니다.")
     @GetMapping("/v1.0/me")
     public ResponseEntity<LoginResponse> me(
-            @CookieValue(value = "token", required = false) String token) {
+            @CookieValue(value = "accessToken", required = false) String accessToken) {
 
         // 1. 쿠키 자체가 없음 → 401
-        if (token == null || token.isBlank()) {
+        if (accessToken == null || accessToken.isBlank()) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
                     .body(new LoginResponse(false, null, null, "토큰이 없습니다.", null));
         }
 
-        LoginResponse result = jwtService.getUserInfoFromToken(token);
+        LoginResponse result = jwtService.getUserInfoFromToken(accessToken);
 
         // 2. 토큰 파싱 실패(만료, 변조 등) → 401 등 reuslt에 새로운 값을 넣어서 보냄 (무한로프 막기 위함)
         if (!result.isSuccess()) {
