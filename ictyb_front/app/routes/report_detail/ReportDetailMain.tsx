@@ -15,6 +15,9 @@ import {
 } from "@/components/ui/pagination";
 import WorkDetailModal from "@routes/common/components/WorkDetailModal";
 import type { WorkDetailItem } from "@routes/common/components/WorkDetailModal";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { YearMonthRangeCalendar } from "@/components/ui/year-month-range-calendar";
 import {
   ClipboardList,
   CheckCircle2,
@@ -23,8 +26,6 @@ import {
   Flame,
   Clock,
   CalendarDays,
-  ChevronLeft,
-  ChevronRight,
   CircleDollarSign, // 🌟 영업용 달러 아이콘 추가
   Zap,              // 🌟 배전용 번개 아이콘 추가
   Wrench,           // 🌟 기술용 렌치 아이콘 추가
@@ -49,17 +50,30 @@ interface WorkOrder {
 
 // ─── 유틸 ────────────────────────────────────────────────────────────────────
 
-const GANTT_RANGE_DAYS = 7; // 간트 차트 좌우 표시 일수
+const GANTT_RANGE_DAYS = 10; // 간트 차트 좌우 표시 일수
 const GANTT_PAGE_SIZE = 10; // 간트 차트 한 페이지당 표시 행 수
 
-// 간트 차트의 #, 지시서, 부서, 작업명, 상태, 시작, 종료, 기간 컬럼 폭 합계(px).
+// 간트 차트의 #, 부서, 작업명, 상태, 시작, 종료, 기간 컬럼 폭 합계(px).
 // 일자별 바 차트의 날짜 열을 간트 차트 날짜 열과 같은 x 위치에 맞추기 위한 오프셋으로도 사용.
-const GANTT_LABEL_WIDTH = 24 + 128 + 56 + 144 + 56 + 56 + 56 + 56;
+const GANTT_LABEL_WIDTH = 24 + 56 + 144 + 56 + 56 + 56 + 56;
+
+// 일자별 바 차트는 간트 차트의 라벨 칼럼 폭(GANTT_LABEL_WIDTH)만큼 왼쪽 여백이 생기므로,
+// 그 여백을 간트 차트보다 더 과거 날짜의 실제 막대로 채운다. 간트 차트에는 이 날짜들을 표시하지 않는다.
+const EXTRA_BAR_DAYS = Math.floor(GANTT_LABEL_WIDTH / 48);
+const BAR_CHART_MARGIN = GANTT_LABEL_WIDTH - EXTRA_BAR_DAYS * 48;
 
 function addDays(date: Date, days: number): Date {
   const d = new Date(date);
   d.setDate(d.getDate() + days);
   return d;
+}
+
+function daysBetweenInclusive(start: Date, end: Date): Date[] {
+  const days: Date[] = [];
+  for (let d = start; d.getTime() <= end.getTime(); d = addDays(d, 1)) {
+    days.push(d);
+  }
+  return days;
 }
 
 function formatDateLabel(date: Date): string {
@@ -123,117 +137,6 @@ function toWorkDetailItem(order: WorkOrder): WorkDetailItem {
   };
 }
 
-
-// ─── 달력 컴포넌트 ────────────────────────────────────────────────────────────
-
-function DatePickerPopover({
-  value,
-  onChange,
-  onClose,
-}: {
-  value: Date;
-  onChange: (d: Date) => void;
-  onClose: () => void;
-}) {
-  const [viewYear, setViewYear] = useState(value.getFullYear());
-  const [viewMonth, setViewMonth] = useState(value.getMonth());
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [onClose]);
-
-  const firstDay = new Date(viewYear, viewMonth, 1).getDay();
-  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
-  const cells: (number | null)[] = [
-    ...Array(firstDay).fill(null),
-    ...Array.from({ length: daysInMonth }, (_, i) => i + 1),
-  ];
-  while (cells.length % 7 !== 0) cells.push(null);
-
-  const MONTH_NAMES = ["1월","2월","3월","4월","5월","6월","7월","8월","9월","10월","11월","12월"];
-  const DAY_NAMES = ["일","월","화","수","목","금","토"];
-
-  const today = new Date();
-
-  return (
-    <div
-      ref={ref}
-      className="absolute z-50 top-10 left-0 bg-white border border-border rounded-xl shadow-xl p-4 w-64"
-      style={{ boxShadow: "0 8px 32px rgba(28,45,79,0.18)" }}
-    >
-      {/* 헤더 */}
-      <div className="flex items-center justify-between mb-3">
-        <button
-          className="p-1 rounded hover:bg-slate-100 transition-colors"
-          onClick={() => {
-            if (viewMonth === 0) { setViewMonth(11); setViewYear(y => y - 1); }
-            else setViewMonth(m => m - 1);
-          }}
-        >
-          <ChevronLeft size={16} />
-        </button>
-        <span className="text-sm font-bold text-[#1C2D4F]">
-          {viewYear}년 {MONTH_NAMES[viewMonth]}
-        </span>
-        <button
-          className="p-1 rounded hover:bg-slate-100 transition-colors"
-          onClick={() => {
-            if (viewMonth === 11) { setViewMonth(0); setViewYear(y => y + 1); }
-            else setViewMonth(m => m + 1);
-          }}
-        >
-          <ChevronRight size={16} />
-        </button>
-      </div>
-      {/* 요일 */}
-      <div className="grid grid-cols-7 mb-1">
-        {DAY_NAMES.map((d, i) => (
-          <div key={d} className={`text-center text-[10px] font-semibold py-1 ${i === 0 ? "text-red-400" : i === 6 ? "text-blue-400" : "text-muted-foreground"}`}>{d}</div>
-        ))}
-      </div>
-      {/* 날짜 */}
-      <div className="grid grid-cols-7">
-        {cells.map((day, idx) => {
-          if (!day) return <div key={idx} />;
-          const thisDate = new Date(viewYear, viewMonth, day);
-          const isSelected = isSameDay(thisDate, value);
-          const isToday = isSameDay(thisDate, today);
-          const dow = idx % 7;
-          return (
-            <button
-              key={idx}
-              className={`text-xs py-1.5 rounded-lg transition-colors font-medium
-                ${isSelected ? "text-white" : isToday ? "font-bold" : ""}
-                ${isSelected ? "" : "hover:bg-slate-100"}
-                ${dow === 0 && !isSelected ? "text-red-400" : ""}
-                ${dow === 6 && !isSelected ? "text-blue-400" : ""}
-              `}
-              style={isSelected ? { backgroundColor: "#1C2D4F", color: "#fff" } : isToday ? { color: "#3A6499" } : {}}
-              onClick={() => { onChange(thisDate); onClose(); }}
-            >
-              {day}
-            </button>
-          );
-        })}
-      </div>
-      {/* 오늘 버튼 */}
-      <div className="mt-3 pt-3 border-t border-border">
-        <button
-          className="w-full text-xs text-center py-1 rounded-lg hover:bg-slate-100 transition-colors font-medium"
-          style={{ color: "#3A6499" }}
-          onClick={() => { onChange(new Date()); onClose(); }}
-        >
-          오늘로 이동
-        </button>
-      </div>
-    </div>
-  );
-}
 
 // ─── 서브 컴포넌트: 통계 카드 ─────────────────────────────────────────────────
 
@@ -312,6 +215,19 @@ function GanttRow({
   selected: boolean;
   onSelect: (o: WorkOrder) => void;
 }>) {
+  const tooltipContent = (
+    <TooltipContent side="top" className="block max-w-none w-64 rounded-lg p-3 text-left">
+      <p className="text-xs font-bold" style={{ color: "#8EC4FF" }}>{order.code}</p>
+      <p className="text-sm font-semibold leading-tight mt-0.5">{order.name}</p>
+      <div className="mt-1.5 space-y-0.5 text-[11px] opacity-90">
+        <div>부서 · 파트: {order.department}</div>
+        <div>담당자: {order.assignee}</div>
+        <div>{formatDateFull(order.startDate)} ~ {formatDateFull(order.endDate)} ({order.duration}일)</div>
+        <div>상태: {order.status} · 결재: {order.approval}</div>
+      </div>
+    </TooltipContent>
+  );
+
   return (
     <tr
       className={`border-b border-border text-xs cursor-pointer transition-colors ${
@@ -320,11 +236,17 @@ function GanttRow({
       onClick={() => onSelect(order)}
     >
       <td className="px-2 py-1.5 text-muted-foreground w-6">{order.id}</td>
-      <td className="px-2 py-1.5 font-medium text-[#3A6499] w-32 whitespace-nowrap">{order.code}</td>
       <td className="px-2 py-1.5 w-14">
         <Badge variant="outline" className="text-[10px] scale-90">{order.department}</Badge>
       </td>
-      <td className="px-2 py-1.5 font-medium w-36 truncate max-w-[144px]">{order.name}</td>
+      <td className="px-2 py-1.5 font-medium w-36 max-w-[144px]">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="block truncate cursor-pointer">{order.name}</span>
+          </TooltipTrigger>
+          {tooltipContent}
+        </Tooltip>
+      </td>
       <td className="px-2 py-1.5 w-14">
         <span className={`font-semibold ${
           order.status === "완료" ? "text-[#3A6080]" :
@@ -359,8 +281,13 @@ function GanttRow({
             )}
 
             {isBar && (
-              <div className={`absolute top-1/2 -translate-y-1/2 h-4 w-full ${isStart ? "rounded-l" : ""} ${isEnd ? "rounded-r" : ""}`} 
-                   style={{ backgroundColor: selected ? "#3A6499" : "#4A7AAA", zIndex: 1 }} />
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className={`absolute top-1/2 -translate-y-1/2 h-4 w-full cursor-pointer ${isStart ? "rounded-l" : ""} ${isEnd ? "rounded-r" : ""}`}
+                       style={{ backgroundColor: selected ? "#3A6499" : "#4A7AAA", zIndex: 1 }} />
+                </TooltipTrigger>
+                {tooltipContent}
+              </Tooltip>
             )}
 
             {isToday && (
@@ -408,11 +335,17 @@ export default function ReportDetailMain() {
   const todayReal = new Date();
   todayReal.setHours(0, 0, 0, 0);
 
-  const [baseDate, setBaseDate] = useState<Date>(todayReal);
+  const [range, setRange] = useState<{ start: Date; end: Date }>(() => ({
+    start: addDays(todayReal, -GANTT_RANGE_DAYS),
+    end: addDays(todayReal, GANTT_RANGE_DAYS),
+  }));
+  const [isCustomRange, setIsCustomRange] = useState(false);
   const [showCalendar, setShowCalendar] = useState(false);
   const [deptTab, setDeptTab] = useState<DeptTab>("전체");
   const [selected, setSelected] = useState<WorkOrder | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
+  // 일자별 바 차트에서 클릭한 날짜(선택 시 간트 차트를 해당 날짜와 겹치는 작업지시서로만 필터링)
+  const [selectedBarDate, setSelectedBarDate] = useState<Date | null>(null);
 
   const [allOrders, setAllOrders] = useState<WorkOrder[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -442,15 +375,17 @@ export default function ReportDetailMain() {
     isSyncingScroll.current = false;
   };
 
-  const fetchOrders = useCallback(async (centerDate: Date) => {
+  const fetchOrders = useCallback(async (rangeStart: Date, rangeEnd: Date, custom: boolean) => {
     setIsLoading(true);
     setError(null);
     try {
-      const rangeStart = addDays(centerDate, -GANTT_RANGE_DAYS);
-      const rangeEnd   = addDays(centerDate, GANTT_RANGE_DAYS);
+      // 기본(오늘 ±N일) 모드에서는 일자별 바 차트 왼쪽 여백을 실제 막대로 채우기 위해 간트 차트보다
+      // 더 과거 날짜까지 함께 조회한다. 사용자가 기간을 직접 지정한 경우에는 지정한 시작일보다
+      // 과거 데이터를 추가로 불러오지 않는다.
+      const fetchStart = custom ? rangeStart : addDays(rangeStart, -EXTRA_BAR_DAYS);
       const fmt = (d: Date) =>
         `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
-      const dtos = await getReportDetail(fmt(rangeStart), fmt(rangeEnd));
+      const dtos = await getReportDetail(fmt(fetchStart), fmt(rangeEnd));
       setAllOrders(dtos.map(toWorkOrder));
     } catch (e) {
       setError("데이터를 불러오는 중 오류가 발생했습니다.");
@@ -461,28 +396,47 @@ export default function ReportDetailMain() {
   }, []);
 
   useEffect(() => {
-    fetchOrders(baseDate);
-  }, [baseDate, fetchOrders]);
+    fetchOrders(range.start, range.end, isCustomRange);
+  }, [range, isCustomRange, fetchOrders]);
 
-  const dates: Date[] = Array.from({ length: GANTT_RANGE_DAYS * 2 + 1 }, (_, i) =>
-    addDays(baseDate, i - GANTT_RANGE_DAYS)
+  const dates: Date[] = daysBetweenInclusive(range.start, range.end);
+
+  // 일자별 바 차트 왼쪽 여백을 채우는 간트 차트 이전 날짜들(간트 차트에는 표시하지 않음).
+  // 기간을 직접 지정한 경우 이 구간의 데이터는 조회되지 않으므로 막대 없이 빈 칸으로만 표시된다.
+  const barExtraDates: Date[] = Array.from({ length: EXTRA_BAR_DAYS }, (_, i) =>
+    addDays(range.start, i - EXTRA_BAR_DAYS)
   );
+  const barChartDates = [...barExtraDates, ...dates];
 
-  const filteredOrders = allOrders.filter(
+  const deptFilteredOrders = allOrders.filter(
     (o) => deptTab === "전체" || o.department === deptTab
   );
 
-  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / GANTT_PAGE_SIZE));
+  // 간트 차트/통계는 기존과 동일하게 ±GANTT_RANGE_DAYS 범위만 사용
+  const filteredOrders = deptFilteredOrders.filter(
+    (o) => o.endDate.getTime() >= dates[0].getTime() && o.startDate.getTime() <= dates[dates.length - 1].getTime()
+  );
 
-  const pagedOrders = filteredOrders.slice(
+  // 바 차트에서 특정 날짜를 선택한 경우, 그 날짜와 겹치는 작업지시서만 간트 차트에 표시
+  const ganttOrders = selectedBarDate
+    ? filteredOrders.filter(
+        (o) =>
+          o.startDate.getTime() <= selectedBarDate.getTime() &&
+          selectedBarDate.getTime() <= o.endDate.getTime()
+      )
+    : filteredOrders;
+
+  const totalPages = Math.max(1, Math.ceil(ganttOrders.length / GANTT_PAGE_SIZE));
+
+  const pagedOrders = ganttOrders.slice(
     (currentPage - 1) * GANTT_PAGE_SIZE,
     currentPage * GANTT_PAGE_SIZE
   );
 
-  // 부서 탭이나 기준일이 바뀌어 목록이 달라지면 1페이지로 복귀
+  // 부서 탭, 조회 기간, 바 차트 날짜 선택이 바뀌어 목록이 달라지면 1페이지로 복귀
   useEffect(() => {
     setCurrentPage(1);
-  }, [deptTab, baseDate]);
+  }, [deptTab, range, selectedBarDate]);
 
   // 필터링 결과가 줄어들어 현재 페이지가 범위를 벗어나면 마지막 페이지로 보정
   useEffect(() => {
@@ -509,23 +463,29 @@ export default function ReportDetailMain() {
   const inProgress = filteredOrders.filter((o) => o.status === "미완료").length; 
   const received = filteredOrders.filter((o) => o.status === "접수").length;
 
-  const chartData = dates.map((d) => {
+  const chartData = barChartDates.map((d) => {
     const ts = d.getTime();
-    const value = filteredOrders.filter(
+    const value = deptFilteredOrders.filter(
       (o) => ts >= o.startDate.getTime() && ts <= o.endDate.getTime()
     ).length;
-    return { date: formatDateLabel(d), value, isToday: isSameDay(d, baseDate), dateObj: d };
+    return { date: formatDateLabel(d), value, isToday: isSameDay(d, todayReal), dateObj: d };
   });
 
-  const maxSimul = Math.max(...chartData.map((d) => d.value));
-  const maxSimulDate = chartData.find((d) => d.value === maxSimul);
+  // "최대 동시 진행" 통계는 간트 차트와 동일한 ±GANTT_RANGE_DAYS 범위 기준(왼쪽 채움용 날짜는 제외)
+  const scopedChartData = chartData.slice(EXTRA_BAR_DAYS);
+  const maxSimul = Math.max(...scopedChartData.map((d) => d.value));
+  const maxSimulDate = scopedChartData.find((d) => d.value === maxSimul);
+
+  // 바 높이 정규화는 채움용 날짜를 포함해 화면에 실제로 그려지는 전체 구간 기준
+  const barScaleMax = Math.max(...chartData.map((d) => d.value));
 
   const avgDuration =
     filteredOrders.length > 0
       ? (filteredOrders.reduce((s, o) => s + Number(o.duration), 0) / filteredOrders.length).toFixed(1)
       : "0";
 
-  const todayIndex = GANTT_RANGE_DAYS;
+  const todayIndex = dates.findIndex((d) => isSameDay(d, todayReal));
+  const barTodayIndex = barChartDates.findIndex((d) => isSameDay(d, todayReal));
 
   const SUMMARY_STATS = [
     { icon: ClipboardList, value: `${total} 건`, label: "전체 작업지시서", highlight: false },
@@ -538,10 +498,9 @@ export default function ReportDetailMain() {
 
  const handleSelect = (order: WorkOrder) => {
     setSelected(order);
+    setDetailOpen(true);
   };
 
-  const rangeStart = addDays(baseDate, -GANTT_RANGE_DAYS);
-  const rangeEnd = addDays(baseDate, GANTT_RANGE_DAYS);
   const fmtRange = (d: Date) => `${d.getFullYear()}.${String(d.getMonth()+1).padStart(2,"0")}.${String(d.getDate()).padStart(2,"0")}`;
 
   return (
@@ -551,29 +510,53 @@ export default function ReportDetailMain() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         {/* 날짜 선택 */}
         <div className="relative flex items-center gap-2">
-          <button
-            className="flex items-center gap-2 bg-white border border-border rounded-lg px-3 py-2 text-sm font-medium shadow-sm hover:shadow-md transition-shadow"
-            style={{ color: "#1C2D4F" }}
-            onClick={() => setShowCalendar((v) => !v)}
-          >
-            <CalendarDays size={16} style={{ color: "#3A6499" }} />
-            <span>{fmtRange(rangeStart)}</span>
-            <span className="text-muted-foreground">~</span>
-            <span>{fmtRange(rangeEnd)}</span>
-            <span className="text-xs text-muted-foreground ml-1">(오늘 기준 ±{GANTT_RANGE_DAYS}일)</span>
-          </button>
-          {showCalendar && (
-            <DatePickerPopover
-              value={baseDate}
-              onChange={(d) => { setBaseDate(d); setSelected(null); }}
-              onClose={() => setShowCalendar(false)}
-            />
-          )}
-          {!isSameDay(baseDate, todayReal) && (
+          <Popover open={showCalendar} onOpenChange={setShowCalendar}>
+            <PopoverTrigger asChild>
+              <button
+                className="flex items-center gap-2 bg-white border border-border rounded-lg px-3 py-2 text-sm font-medium shadow-sm hover:shadow-md transition-shadow"
+                style={{ color: "#1C2D4F" }}
+              >
+                <CalendarDays size={16} style={{ color: "#3A6499" }} />
+                <span>{fmtRange(range.start)}</span>
+                <span className="text-muted-foreground">~</span>
+                <span>{fmtRange(range.end)}</span>
+                <span
+                  className={`text-xs text-muted-foreground ml-1 ${
+                    isCustomRange ? "invisible" : ""
+                  }`}
+                >
+                  (오늘 기준 ±{GANTT_RANGE_DAYS}일)
+                </span>
+              </button>
+            </PopoverTrigger>
+            <PopoverContent
+              className="w-auto overflow-hidden p-0"
+              align="start"
+              side="bottom"
+              avoidCollisions={false}
+            >
+              <YearMonthRangeCalendar
+                selected={range}
+                onSelect={(r) => {
+                  setRange(r);
+                  setIsCustomRange(true);
+                  setSelected(null);
+                  setSelectedBarDate(null);
+                  setShowCalendar(false);
+                }}
+              />
+            </PopoverContent>
+          </Popover>
+          {isCustomRange && (
             <button
               className="text-xs px-2.5 py-1.5 rounded-lg border border-border bg-white hover:bg-slate-50 transition-colors font-medium"
               style={{ color: "#3A6499" }}
-              onClick={() => { setBaseDate(todayReal); setSelected(null); }}
+              onClick={() => {
+                setRange({ start: addDays(todayReal, -GANTT_RANGE_DAYS), end: addDays(todayReal, GANTT_RANGE_DAYS) });
+                setIsCustomRange(false);
+                setSelected(null);
+                setSelectedBarDate(null);
+              }}
             >
               오늘로
             </button>
@@ -593,7 +576,7 @@ export default function ReportDetailMain() {
                   active ? "text-white shadow-sm" : "text-muted-foreground hover:text-foreground hover:bg-slate-50"
                 }`}
                 style={active ? { backgroundColor: "#1C2D4F" } : {}}
-                onClick={() => { setDeptTab(tab.key); setSelected(null); }}
+                onClick={() => { setDeptTab(tab.key); setSelected(null); setSelectedBarDate(null); }}
               >
                 <Icon size={14} />
                 {tab.label}
@@ -624,13 +607,24 @@ export default function ReportDetailMain() {
 
       {/* ── 일자별 바 차트 (독립 박스) ── */}
           <Card className="border border-border/60 shadow-md">
-            <CardHeader className="pb-1 pt-3 px-5">
-              <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
-                <span>📊</span> 일자별 동시 진행 작업 수
-              </CardTitle>
-              <p className="text-xs text-muted-foreground">
-                막대 높이 = 해당 일자에 동시 진행 중인 작업지시서 수
-              </p>
+            <CardHeader className="pb-1 pt-3 px-5 flex flex-row items-start justify-between">
+              <div>
+                <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
+                  <span>📊</span> 일자별 동시 진행 작업 수
+                </CardTitle>
+                <p className="text-xs text-muted-foreground">
+                  막대 높이 = 해당 일자에 동시 진행 중인 작업지시서 수
+                </p>
+              </div>
+              {selectedBarDate && (
+                <button
+                  className="text-xs px-2.5 py-1 rounded-lg border border-border bg-white hover:bg-slate-50 transition-colors font-medium"
+                  style={{ color: "#3A6499" }}
+                  onClick={() => setSelectedBarDate(null)}
+                >
+                  초기화
+                </button>
+              )}
             </CardHeader>
             <CardContent
                 ref={barScrollRef}
@@ -640,25 +634,30 @@ export default function ReportDetailMain() {
                 <div
                 style={{
                     display:"grid",
-                    gridTemplateColumns:`repeat(${dates.length},48px)`,
-                    width:`${dates.length * 48}px`,
+                    gridTemplateColumns:`repeat(${barChartDates.length},48px)`,
+                    width:`${barChartDates.length * 48}px`,
                     height:"230px",
                     position:"relative",
-                    marginLeft:`${GANTT_LABEL_WIDTH}px`,
+                    marginLeft:`${BAR_CHART_MARGIN}px`,
                 }}
                 >
 
                 {chartData.map((d,index)=>{
                     const BAR_MAX_H = 155;
-                    const barH = maxSimul > 0 ? Math.round((d.value / maxSimul) * BAR_MAX_H) : 0;
+                    const barH = barScaleMax > 0 ? Math.round((d.value / barScaleMax) * BAR_MAX_H) : 0;
+                    const isFiller = index < EXTRA_BAR_DAYS;
+                    const isSelectedBar = !isFiller && !!selectedBarDate && isSameDay(d.dateObj, selectedBarDate);
                     return (
                 <div
                     key={index}
+                    onClick={isFiller ? undefined : () => setSelectedBarDate(d.dateObj)}
                     style={{
                     width:"48px",
                     height:"100%",
                     position:"relative",
                     borderLeft:"1px dashed #e2e8f0",
+                    cursor: isFiller ? "default" : "pointer",
+                    backgroundColor: isSelectedBar ? "rgba(74,122,170,0.10)" : undefined,
                     }}
                 >
 
@@ -672,12 +671,18 @@ export default function ReportDetailMain() {
                         width:"24px",
                         height:`${barH}px`,
                         backgroundColor:
-                            d.isToday
+                            // 간트 차트 라벨 칼럼(부서/작업명/상태/시작/종료/기간) 위에 정렬용으로 채운
+                            // 선택 기간 이전 구간은 실제 조회 기간과 구분되도록 회색으로 표시
+                            isFiller
+                            ? "#a1a1aa"
+                            : d.isToday
                             ? "#4A7AAA"
-                            : index < todayIndex
+                            : index < barTodayIndex
                             ? "#7AAAC8"
                             : "#B8CFE0",
                         borderRadius:"3px 3px 0 0",
+                        outline: isSelectedBar ? "2px solid #ef4444" : "none",
+                        outlineOffset: "1px",
                         }}
                     />
                     )}
@@ -708,10 +713,12 @@ export default function ReportDetailMain() {
                         width:"48px",
                         textAlign:"center",
                         fontSize:"10px",
-                        color:d.isToday
+                        color:isSelectedBar
+                        ? "#ef4444"
+                        : d.isToday
                         ? "#1C2D4F"
                         : "#94a3b8",
-                        fontWeight:d.isToday ? 700 : 400,
+                        fontWeight:isSelectedBar || d.isToday ? 700 : 400,
                     }}
                     >
                     {d.date}
@@ -723,17 +730,19 @@ export default function ReportDetailMain() {
                 })}
 
 
-                {/* 오늘 기준선 */}
+                {/* 오늘 기준선(오늘이 현재 조회 기간 안에 있을 때만 표시) */}
+                {barTodayIndex !== -1 && (
                 <div
                 style={{
                 position:"absolute",
-                left:`${todayIndex * 48 + 24}px`,
+                left:`${barTodayIndex * 48 + 24}px`,
                 top:0,
                 height:"190px",
                 borderLeft:"2px dashed #3A6499",
                 opacity:0.6,
                 }}
                 />
+                )}
 
 
                 </div>
@@ -743,15 +752,27 @@ export default function ReportDetailMain() {
 
 
         
-          {/* 간트 차트 + 선택 정보 */}
-          <div className="flex gap-3 items-start">
-            {/* 간트 테이블 */}
-            <Card className="flex-1 overflow-hidden min-w-0 border border-border/60">
+          {/* 간트 차트 */}
+          <TooltipProvider delayDuration={100}>
+          <Card className="overflow-hidden border border-border/60">
               <CardHeader className="pb-2 pt-3 px-5 flex flex-row items-center justify-between">
-                <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
-                    <span>📋</span> 간트 차트
-                </CardTitle>
-                <GanttLegend />
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-sm font-semibold flex items-center gap-1.5">
+                      <span>📋</span> 간트 차트
+                  </CardTitle>
+                  {selectedBarDate && (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px]"
+                      style={{ borderColor: "#4A7AAA", color: "#3A6499" }}
+                    >
+                      {formatDateFull(selectedBarDate)} 필터 중
+                    </Badge>
+                  )}
+                </div>
+                <div className="flex items-center gap-3">
+                  <GanttLegend />
+                </div>
               </CardHeader>
               <CardContent
                 ref={ganttScrollRef}
@@ -762,7 +783,6 @@ export default function ReportDetailMain() {
                   <thead>
                     <tr className="border-b border-border bg-slate-50">
                       <th className="px-2 py-2 text-left w-6 text-xs text-muted-foreground font-normal">#</th>
-                      <th className="px-2 py-2 text-left w-32 text-xs text-muted-foreground font-normal">지시서</th>
                       <th className="px-2 py-2 text-left w-14 text-xs text-muted-foreground font-normal">부서</th>
                       <th className="px-2 py-2 text-left w-36 text-xs text-muted-foreground font-normal">작업명</th>
                       <th className="px-2 py-2 text-left w-14 text-xs text-muted-foreground font-normal">상태</th>
@@ -790,13 +810,15 @@ export default function ReportDetailMain() {
                     </tr>
                   </thead>
                   <tbody>
-                    {filteredOrders.length === 0 ? (
+                    {ganttOrders.length === 0 ? (
                       <tr>
                         <td colSpan={6 + dates.length} className="text-center py-8 text-muted-foreground text-xs">
                           {isLoading
                             ? "데이터를 불러오는 중입니다..."
                             : error
                             ? error
+                            : selectedBarDate
+                            ? "선택한 날짜에 해당하는 작업지시서가 없습니다."
                             : "해당 부서의 작업지시서가 없습니다."}
                         </td>
                       </tr>
@@ -807,7 +829,7 @@ export default function ReportDetailMain() {
                           order={order}
                           filteredOrders={filteredOrders}
                           dates={dates}
-                          todayDate={baseDate}
+                          todayDate={todayReal}
                           selected={selected?.id === order.id}
                           onSelect={handleSelect}
                         />
@@ -817,10 +839,10 @@ export default function ReportDetailMain() {
                 </table>
               </CardContent>
 
-              {filteredOrders.length > 0 && (
+              {ganttOrders.length > 0 && (
                 <div className="px-4 pb-3 pt-1 border-t border-border/60">
                   <div className="text-right text-[11px] text-muted-foreground mb-1">
-                    총 {filteredOrders.length}건
+                    총 {ganttOrders.length}건
                   </div>
                   <Pagination>
                     <PaginationContent>
@@ -871,88 +893,7 @@ export default function ReportDetailMain() {
                 </div>
               )}
             </Card>
-
-            {/* 선택한 작업 정보 */}
-            <Card className="w-56 shrink-0 border border-border/60">
-              <CardHeader className="pb-2 pt-3 px-4">
-                <CardTitle className="text-sm font-semibold flex items-center gap-1">
-                  <span>📌</span> 선택한 작업 정보
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="px-4 pb-4">
-                {selected ? (
-                  <div className="space-y-3">
-                    <div>
-                      <p className="text-xs font-bold text-[#3A6499]">{selected.code}</p>
-                      <p className="text-sm font-semibold text-[#1C2D4F] leading-tight mt-0.5">
-                        {selected.name}
-                      </p>
-                    </div>
-                    <div className="space-y-2 text-xs">
-                      {[
-                        { label: "부서 · 파트", value: selected.department },
-                        { label: "담당자", value: selected.assignee },
-                        { label: "시작일", value: formatDateFull(selected.startDate) },
-                        { label: "종료일", value: formatDateFull(selected.endDate) },
-                        { label: "기간", value: `${selected.duration}일` },
-                      ].map(({ label, value }) => (
-                        <div key={label} className="flex justify-between items-start gap-1">
-                          <span className="text-muted-foreground shrink-0">{label}</span>
-                          <span className="font-medium text-right">{value}</span>
-                        </div>
-                      ))}
-                      <div className="flex justify-between items-center">
-                        <span className="text-muted-foreground">상태</span>
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px] px-1.5 py-0"
-                          style={{
-                            backgroundColor:
-                              selected.status === "미완료" ? "#EFF6FF"
-                              : selected.status === "완료" ? "#F0FDF4"
-                              : "#FFF7ED",
-                            color:
-                              selected.status === "미완료" ? "#3A6499"
-                              : selected.status === "완료" ? "#16a34a"
-                              : "#ea580c",
-                          }}
-                        >
-                          ● {selected.status}
-                        </Badge>
-                      </div>
-                      <div className="flex justify-between items-center">
-                        <span className="text-muted-foreground">결재</span>
-                        <Badge
-                          variant="secondary"
-                          className="text-[10px] px-1.5 py-0"
-                          style={{
-                            backgroundColor: selected.approval === "미요청" ? "#FFF7ED" : "#F0FDF4",
-                            color: selected.approval === "미요청" ? "#ea580c" : "#16a34a",
-                          }}
-                        >
-                          ● {selected.approval}
-                        </Badge>
-                      </div>
-                    </div>
-                    <Button
-                      className="w-full text-xs h-8"
-                      style={{ backgroundColor: "#1C2D4F" }}
-                      onClick={() => setDetailOpen(true)}
-                    >
-                      상세보기
-                    </Button>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center py-8 text-center gap-2">
-                    <ClipboardList size={28} className="text-muted-foreground opacity-40" />
-                    <p className="text-xs text-muted-foreground">
-                      간트 차트에서<br />작업을 선택하세요
-                    </p>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+          </TooltipProvider>
       </div>
 
       <WorkDetailModal

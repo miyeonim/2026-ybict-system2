@@ -10,6 +10,19 @@ import { ClipboardList, Paperclip } from "lucide-react";
 import { fetchReportList } from "@hooks/report_daily/ReportDailyController";
 import type { SalesDailyReportListItem } from "@hooks/report_daily/type";
 
+const todayStr = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+
+const STATUS_BADGE_CLASS: Record<string, string> = {
+  작성중: "text-slate-500 border-slate-300",
+  파트장결재대기: "text-amber-600 border-amber-300",
+  부장결재대기: "text-[#3A6499] border-[#3A6499]/40",
+  승인완료: "text-emerald-600 border-emerald-300",
+  반려: "text-red-500 border-red-300",
+};
+
 export default function ReportDailyMain() {
   const navigate = useNavigate();
   const [reports, setReports] = useState<SalesDailyReportListItem[]>([]);
@@ -34,10 +47,10 @@ export default function ReportDailyMain() {
       <div className="flex items-center justify-between flex-wrap gap-3">
         <h1 className="text-lg font-bold text-[#1C2D4F]">영업 점검일지</h1>
         <Button
-          onClick={() => navigate("/report_daily/register")}
+          onClick={() => navigate(`/report_daily/view/${todayStr()}`)}
           className="bg-[#1C2D4F] hover:bg-[#3A6499] text-white shadow-md transition-all"
         >
-          + 영업 점검일지 등록
+          + 영업 점검일지 작성
         </Button>
       </div>
 
@@ -55,8 +68,9 @@ export default function ReportDailyMain() {
               <TableHeader className="bg-slate-50">
                 <TableRow>
                   <TableHead className="w-[120px] text-center text-[#1C2D4F] font-bold">작성일</TableHead>
-                  <TableHead className="w-[100px] text-center text-[#1C2D4F] font-bold">작성자</TableHead>
+                  <TableHead className="w-[100px] text-center text-[#1C2D4F] font-bold">최종 수정자</TableHead>
                   <TableHead className="text-center text-[#1C2D4F] font-bold">포함 파트</TableHead>
+                  <TableHead className="w-[100px] text-center text-[#1C2D4F] font-bold">상태</TableHead>
                   <TableHead className="w-[80px] text-center text-[#1C2D4F] font-bold">진행중</TableHead>
                   <TableHead className="w-[80px] text-center text-[#1C2D4F] font-bold">일정지연</TableHead>
                   <TableHead className="w-[70px] text-center text-[#1C2D4F] font-bold">첨부</TableHead>
@@ -65,13 +79,13 @@ export default function ReportDailyMain() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-10 text-slate-400">
+                    <TableCell colSpan={7} className="text-center py-10 text-slate-400">
                       불러오는 중...
                     </TableCell>
                   </TableRow>
                 ) : sortedReports.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={6} className="text-center py-10 text-slate-400">
+                    <TableCell colSpan={7} className="text-center py-10 text-slate-400">
                       등록된 영업 점검일지가 없습니다.
                     </TableCell>
                   </TableRow>
@@ -80,7 +94,7 @@ export default function ReportDailyMain() {
                     <TableRow
                       key={report.reportId}
                       className="cursor-pointer hover:bg-slate-50 transition-colors"
-                      onClick={() => navigate(`/report_daily/${report.reportId}`)}
+                      onClick={() => navigate(`/report_daily/view/${report.reportDate}`)}
                     >
                       <TableCell className="text-center">{report.reportDate}</TableCell>
                       <TableCell className="text-center">{report.authorName}</TableCell>
@@ -96,6 +110,14 @@ export default function ReportDailyMain() {
                             </Badge>
                           ))}
                         </div>
+                      </TableCell>
+                      <TableCell className="text-center">
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] font-semibold ${STATUS_BADGE_CLASS[report.overallStatus] ?? ""}`}
+                        >
+                          {report.overallStatus}
+                        </Badge>
                       </TableCell>
                       <TableCell className="text-center font-semibold text-[#3A6499]">{report.totalInProgress}</TableCell>
                       <TableCell className="text-center font-semibold text-red-500">{report.totalDelayed}</TableCell>

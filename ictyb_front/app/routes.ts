@@ -12,9 +12,9 @@ export default [
       route("/works_part", "routes/works_part/WorksPartMain.tsx"),                //작업현황.   메인
       route("/works_all", "routes/works_all/WorksAllMain.tsx"),                   //작업지시서(ALL) 메인
       route("/works_my", "routes/works_my/WorksMyMain.tsx"),                      //작업지시서(MY) 메인
+      route("/works_request_my", "routes/works_request_my/WorksRequestMyMain.tsx"), //작업 요청서(MY) 메인 (한전 전용)
       route("/report_daily", "routes/report_daily/ReportDailyMain.tsx"),          //영업점검일지 목록
-      route("/report_daily/register", "routes/report_daily/ReportDailyRegister.tsx"), //영업점검일지 등록
-      route("/report_daily/:id", "routes/report_daily/ReportDailyDetail.tsx"),    //영업점검일지 상세
+      route("/report_daily/view/:date", "routes/report_daily/ReportDailyView.tsx"), //영업점검일지 작성/결재 (날짜 기준)
       route("/qna/list", "routes/qna/list/QnaList.tsx"),                          //Q&A
     ]),
 

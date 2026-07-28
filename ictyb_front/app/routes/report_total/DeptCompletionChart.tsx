@@ -139,7 +139,10 @@ export default function DeptCompletionChart() {
         ) : (
           // 버튼 클릭 시 차트 유지, opacity만 낮춤 → 깜빡임 없음
           <div style={{ opacity: fetching ? 0.5 : 1, transition: "opacity 0.2s" }}>
-            <div className="grid grid-cols-3 gap-2">
+            <div
+              className="grid gap-2"
+              style={{ gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))" }}
+            >
               {sections.map((dept) => (
                 <div key={dept.title} className="border rounded-lg p-2" style={{ borderColor: COLOR.border }}>
                   <div className="text-[11px] font-bold text-center pb-2 mb-2 border-b" style={{ color: COLOR.navy, borderColor: COLOR.border }}>

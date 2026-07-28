@@ -235,8 +235,11 @@ cd ictyb_front
 # 3) npm 캐시를 이관받은 offline-cache로 지정
 npm config set cache .\offline-cache
 
-# 4) 오프라인 설치 (네트워크 전혀 사용 안 함)
+# 4) 오프라인 설치 (네트워크 전혀 사용 안 함 )
 npm install --offline
+
+# 4-1) 4번이 안되는경우 
+npm install --offline --cache=./offline-cache --no-audit
 
 # 5) 개발 서버 실행
 npm run dev

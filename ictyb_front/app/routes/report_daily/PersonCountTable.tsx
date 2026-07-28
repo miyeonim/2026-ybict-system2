@@ -5,14 +5,12 @@ interface PersonCountTableProps {
   people: PersonCount[];
   editable?: boolean;
   onChangePerson?: (index: number, field: "inProgress" | "delayed" | "distributed", value: number) => void;
-  onRemovePerson?: (index: number) => void;
 }
 
 export default function PersonCountTable({
   people,
   editable = false,
   onChangePerson,
-  onRemovePerson,
 }: PersonCountTableProps) {
   const totals = calcTotals(people);
 
@@ -53,19 +51,7 @@ export default function PersonCountTable({
             <th className="px-3 py-2 font-semibold text-[#1C2D4F] w-28">구분</th>
             {people.map((p, idx) => (
               <th key={`${p.name}-${idx}`} className="px-3 py-2 font-semibold text-[#1C2D4F]">
-                <div className="flex items-center justify-center gap-1.5">
-                  <span>{p.name}</span>
-                  {editable && (
-                    <button
-                      type="button"
-                      onClick={() => onRemovePerson?.(idx)}
-                      className="text-muted-foreground hover:text-red-500 text-xs transition-colors"
-                      aria-label={`${p.name} 삭제`}
-                    >
-                      ✕
-                    </button>
-                  )}
-                </div>
+                {p.name}
               </th>
             ))}
             <th className="px-3 py-2 font-semibold text-[#1C2D4F] bg-slate-100 w-20">합계</th>

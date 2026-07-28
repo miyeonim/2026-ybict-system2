@@ -7,10 +7,9 @@ import PersonCountTable from "@routes/report_daily/PersonCountTable";
 
 interface PartSectionFormProps {
   section: PartSectionContent;
-  editable?: boolean;
   onChange?: (section: PartSectionContent) => void;
-  /** 상세 화면에서만 전달됨 — 서버에 저장된 첨부파일 다운로드에 사용 */
-  reportId?: number;
+  /** 서버에 저장된 첨부파일 다운로드에 사용 (아직 아무도 제출하지 않은 날짜라면 없음) */
+  reportId?: number | null;
 }
 
 const formatBytes = (bytes: number) => {
@@ -31,8 +30,22 @@ const TEXT_SECTIONS: {
   { key: "specialNotes", label: "특이사항", rows: 2 },
 ];
 
-export default function PartSectionForm({ section, editable = false, onChange, reportId }: PartSectionFormProps) {
+export const STATUS_LABEL: Record<PartSectionContent["status"], string> = {
+  DRAFT: "작성 전",
+  SUBMITTED: "파트장 결재 대기",
+  PART_APPROVED: "부장 결재 대기",
+  FINAL_APPROVED: "승인 완료",
+  REJECTED: "반려됨",
+};
+
+export default function PartSectionForm({
+  section,
+  onChange,
+  reportId,
+}: PartSectionFormProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const editable = section.canEdit;
 
   const update = (patch: Partial<PartSectionContent>) => {
     onChange?.({ ...section, ...patch });
@@ -40,10 +53,6 @@ export default function PartSectionForm({ section, editable = false, onChange, r
 
   const handleChangePerson = (index: number, field: "inProgress" | "delayed" | "distributed", value: number) => {
     update({ people: section.people.map((p, i) => (i === index ? { ...p, [field]: value } : p)) });
-  };
-
-  const handleRemovePerson = (index: number) => {
-    update({ people: section.people.filter((_, i) => i !== index) });
   };
 
   const handleFileAdd = (newFiles: FileList | null) => {
@@ -63,6 +72,8 @@ export default function PartSectionForm({ section, editable = false, onChange, r
 
   return (
     <div className="flex flex-col gap-4">
+      <StatusBanner section={section} />
+
       {/* 인원별 작업지시 및 배포 건수 */}
       <div className="flex flex-col gap-2">
         <SectionLabel>인원별 작업지시 및 배포 건수</SectionLabel>
@@ -70,7 +81,6 @@ export default function PartSectionForm({ section, editable = false, onChange, r
           people={section.people}
           editable={editable}
           onChangePerson={handleChangePerson}
-          onRemovePerson={handleRemovePerson}
         />
       </div>
 
@@ -155,6 +165,54 @@ export default function PartSectionForm({ section, editable = false, onChange, r
       </div>
     </div>
   );
+}
+
+function StatusBanner({ section }: { section: PartSectionContent }) {
+  if (section.status === "REJECTED") {
+    return (
+      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-600 space-y-0.5">
+        <p className="font-semibold">
+          반려됨 ({section.rejectedByRole === "HEAD" ? "부장" : "파트장"} {section.rejectedByName})
+        </p>
+        {section.rejectReason && <p>사유: {section.rejectReason}</p>}
+        {section.canEdit && <p className="text-red-500">내용을 수정한 뒤 다시 제출해주세요.</p>}
+      </div>
+    );
+  }
+
+  if (section.status === "DRAFT" && section.myRole === "VIEWER") {
+    return (
+      <div className="rounded-lg border border-border bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
+        아직 작성되지 않았습니다.
+      </div>
+    );
+  }
+
+  if (section.status === "SUBMITTED" && section.myRole !== "LEADER") {
+    return (
+      <div className="rounded-lg border border-border bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
+        파트장 결재 대기 중입니다. (작성자: {section.authorName})
+      </div>
+    );
+  }
+
+  if (section.status === "PART_APPROVED" && section.myRole !== "HEAD") {
+    return (
+      <div className="rounded-lg border border-border bg-slate-50 px-3 py-2 text-xs text-muted-foreground">
+        부장 최종 결재 대기 중입니다. (파트장 승인: {section.partLeaderName})
+      </div>
+    );
+  }
+
+  if (section.status === "FINAL_APPROVED") {
+    return (
+      <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs text-emerald-600">
+        최종 승인 완료 (파트장 {section.partLeaderName} / 부장 {section.headName})
+      </div>
+    );
+  }
+
+  return null;
 }
 
 function SectionLabel({ children }: { children: React.ReactNode }) {

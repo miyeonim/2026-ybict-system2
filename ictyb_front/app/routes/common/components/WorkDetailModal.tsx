@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import {
   Dialog,
   DialogContent,
@@ -16,6 +17,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { DatePickerField } from "@/components/ui/date-picker-field";
 import {
   MessageSquare,
   FileText,
@@ -27,6 +31,11 @@ import {
   User,
   X,
   Pencil,
+  Trash2,
+  History as HistoryIcon,
+  FileDown,
+  FileSearch,
+  CalendarClock,
 } from "lucide-react";
 import { useAuthContext } from "@routes/common/jwt/AuthContext";
 import {
@@ -45,13 +54,17 @@ import {
   submitApproval,
   fetchCreateOptions,
   updateWorkOrder,
+  deleteWorkOrder,
+  extendWorkPeriod,
 } from "@hooks/work_my/WorksMyController";
 import type {
   WorksMyDetail,
   WorksMyCandidate,
   WorksMyCreateOptions,
   WorksMyUpdateRequest,
+  WorksMySecretInfo,
 } from "@routes/works_my/WorksMyDto";
+import CreateWorkRequestDialog from "@routes/works_my/CreateWorkRequestDialog";
 
 export type ModalTab = "기본정보" | "업무협의";
 
@@ -82,6 +95,8 @@ interface Props {
   onDiscussionCreated?: (workOrderNo: string) => void;
   /** 업무협의 탭 진입해 협의 목록을 읽음 처리한 뒤 호출됨 - 부모 화면의 협의 탭 new! 배지를 새로고침할 때 사용 */
   onDiscussionsRead?: (workOrderNo: string) => void;
+  /** 삭제 완료 시 호출됨. 전달되지 않으면 삭제 버튼은 표시되지 않는다. */
+  onDeleted?: (workOrderNo: string) => void;
 }
 
 const formatBytes = (bytes: number) => {
@@ -100,9 +115,9 @@ const BasicInfoRow: React.FC<{ label: string; children: React.ReactNode }> = ({
   label,
   children,
 }) => (
-  <div className="flex items-center gap-3 py-2.5 border-b border-slate-100">
-    <span className="w-20 shrink-0 text-sm text-slate-400">{label}</span>
-    <span className="text-sm text-slate-700 truncate">{children}</span>
+  <div className="flex items-start gap-3 py-2.5 border-b border-slate-100">
+    <span className="w-20 shrink-0 text-sm text-slate-400 pt-0.5">{label}</span>
+    <span className="text-sm text-slate-700 break-words">{children}</span>
   </div>
 );
 
@@ -111,6 +126,7 @@ const WorkResultSection: React.FC<{
   detail: WorksMyDetail | null;
   onSubmitted?: (workOrderNo: string) => void;
 }> = ({ detail, onSubmitted }) => {
+  const { user } = useAuthContext();
   const [resultText, setResultText] = useState("");
   const [candidates, setCandidates] = useState<WorksMyCandidate[]>([]);
   const [selectedSabun, setSelectedSabun] = useState("");
@@ -119,14 +135,18 @@ const WorkResultSection: React.FC<{
   const [error, setError] = useState<string | null>(null);
   const [resultFiles, setResultFiles] = useState<File[]>([]);
   const resultFileInputRef = useRef<HTMLInputElement>(null);
+  const [resultIsSecret, setResultIsSecret] = useState("N");
+  const [resultOppbClYn, setResultOppbClYn] = useState("Y");
+  const [resultUserSecretContent, setResultUserSecretContent] = useState("");
+  const [resultAttachExpireDate, setResultAttachExpireDate] = useState("");
 
   const canWrite =
     !!detail && !detail.workResult && detail.myTurn && detail.currentActId === "109" && !!onSubmitted;
 
   useEffect(() => {
-    if (!canWrite || !detail) return;
+    if (!canWrite || !detail || !user) return;
     setLoadingCandidates(true);
-    fetchNextCandidates(detail.workOrderNo)
+    fetchNextCandidates(detail.workOrderNo, user.userEmpno)
       .then((res) => {
         setCandidates(res.candidates);
         // 후보가 한전 반송자 한 명으로 고정된 경우(한전이 실제 작업자에게 직접 반송한 재작업 건)처럼
@@ -141,7 +161,7 @@ const WorkResultSection: React.FC<{
   }, [canWrite, detail?.workOrderNo]);
 
   const handleSubmit = async () => {
-    if (!detail || !resultText.trim()) return;
+    if (!detail || !user || !resultText.trim()) return;
     const next = candidates.find((c) => c.sabun === selectedSabun);
     if (!next) {
       setError("다음 결재자를 선택하세요.");
@@ -150,7 +170,13 @@ const WorkResultSection: React.FC<{
     setSubmitting(true);
     setError(null);
     try {
-      await submitApproval(detail.workOrderNo, next, resultText.trim(), resultFiles);
+      const secretInfo: WorksMySecretInfo = {
+        isSecret: resultIsSecret,
+        oppbClYn: resultOppbClYn,
+        userSecretContent: resultUserSecretContent,
+        attachExpireDate: resultAttachExpireDate,
+      };
+      await submitApproval(detail.workOrderNo, user, next, resultText.trim(), resultFiles, secretInfo);
       onSubmitted?.(detail.workOrderNo);
     } catch (e: any) {
       setError(e.message ?? "조치사항 제출 중 오류가 발생했습니다.");
@@ -211,6 +237,68 @@ const WorkResultSection: React.FC<{
             ))}
           </ul>
         )}
+
+        <div className="flex flex-col gap-2 border border-slate-200 rounded-lg p-3">
+          <div className="flex flex-wrap items-start gap-4">
+            <div className="flex items-center gap-2 shrink-0">
+              <Checkbox
+                id="result-view-is-secret"
+                checked={detail.workResult.isSecret === "Y"}
+                disabled
+              />
+              <Label htmlFor="result-view-is-secret" className="whitespace-nowrap">
+                개인정보 포함 여부
+              </Label>
+            </div>
+
+            <div className="flex items-start gap-3 shrink-0">
+              <p className="text-xs text-slate-500 leading-relaxed w-64 shrink-0">
+                <span className="font-medium text-slate-600">개인정보보호법 제2조(정의)</span>
+                <br />
+                "개인정보"란 살아있는 개인을 알아볼 수 있는 정보(성명, 주민번호 등)로서 다른
+                정보와 쉽게 결합하여 개인을 알아볼 수 있는 것도 포함함.
+              </p>
+
+              <RadioGroup
+                value={detail.workResult.oppbClYn ?? ""}
+                disabled
+                className="flex flex-col gap-1.5 shrink-0"
+              >
+                <div className="flex items-center gap-1.5">
+                  <RadioGroupItem value="Y" id="result-view-oppb-y" />
+                  <Label htmlFor="result-view-oppb-y" className="font-normal whitespace-nowrap">
+                    1. 대외 게시용
+                  </Label>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <RadioGroupItem value="N" id="result-view-oppb-n" />
+                  <Label htmlFor="result-view-oppb-n" className="font-normal whitespace-nowrap">
+                    2. 기타(1번 제외)
+                  </Label>
+                </div>
+              </RadioGroup>
+            </div>
+
+            <div className="flex items-center gap-2 flex-1 min-w-48">
+              <Label className="whitespace-nowrap shrink-0">개인정보 포함 항목</Label>
+              <Input
+                value={detail.workResult.userSecretContent ?? ""}
+                disabled
+                readOnly
+                placeholder="예: 성명, 연락처"
+              />
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Label className="whitespace-nowrap">파기일</Label>
+            <DatePickerField
+              value={detail.workResult.attachExpireDate ?? ""}
+              onChange={() => {}}
+              disabled
+            />
+          </div>
+        </div>
       </div>
     );
   }
@@ -288,6 +376,71 @@ const WorkResultSection: React.FC<{
         )}
       </div>
 
+      <div className="flex flex-col gap-2 border border-slate-200 rounded-lg p-3">
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex items-center gap-2 shrink-0">
+            <Checkbox
+              id="result-is-secret"
+              checked={resultIsSecret === "Y"}
+              onCheckedChange={(checked) =>
+                setResultIsSecret(checked === true ? "Y" : "N")
+              }
+            />
+            <Label htmlFor="result-is-secret" className="cursor-pointer whitespace-nowrap">
+              개인정보 포함 여부
+            </Label>
+          </div>
+
+          <div className="flex items-start gap-3 shrink-0">
+            <p className="text-xs text-slate-500 leading-relaxed w-64 shrink-0">
+              <span className="font-medium text-slate-600">개인정보보호법 제2조(정의)</span>
+              <br />
+              "개인정보"란 살아있는 개인을 알아볼 수 있는 정보(성명, 주민번호 등)로서 다른
+              정보와 쉽게 결합하여 개인을 알아볼 수 있는 것도 포함함.
+            </p>
+
+            <RadioGroup
+              value={resultOppbClYn}
+              onValueChange={(v: string) => setResultOppbClYn(v)}
+              disabled={resultIsSecret !== "Y"}
+              className="flex flex-col gap-1.5 shrink-0"
+            >
+              <div className="flex items-center gap-1.5">
+                <RadioGroupItem value="Y" id="result-oppb-y" />
+                <Label htmlFor="result-oppb-y" className="cursor-pointer font-normal whitespace-nowrap">
+                  1. 대외 게시용
+                </Label>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <RadioGroupItem value="N" id="result-oppb-n" />
+                <Label htmlFor="result-oppb-n" className="cursor-pointer font-normal whitespace-nowrap">
+                  2. 기타(1번 제외)
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+
+          <div className="flex items-center gap-2 flex-1 min-w-48">
+            <Label className="whitespace-nowrap shrink-0">개인정보 포함 항목</Label>
+            <Input
+              value={resultUserSecretContent}
+              onChange={(e) => setResultUserSecretContent(e.target.value)}
+              disabled={resultIsSecret !== "Y"}
+              placeholder="예: 성명, 연락처"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Label className="whitespace-nowrap">파기일</Label>
+          <DatePickerField
+            value={resultAttachExpireDate}
+            onChange={(v) => setResultAttachExpireDate(v)}
+            disabled={resultIsSecret !== "Y"}
+          />
+        </div>
+      </div>
+
       <div className="flex flex-col gap-1.5">
         <p className="text-xs text-slate-400">다음 결재자</p>
         {loadingCandidates ? (
@@ -335,13 +488,19 @@ const WorkResultSection: React.FC<{
 const EMPTY_UPDATE_FORM: WorksMyUpdateRequest = {
   changeTitle: "",
   changeReason: "",
+  systemCd: "",
   serviceType: "",
   workType: "",
   workGubun: "",
   workLevel: "",
   workPeriod: "",
+  workDuration: "",
   expectedFinishedDt: "",
   drsImptYn: "",
+  isSecret: "N",
+  oppbClYn: "Y",
+  userSecretContent: "",
+  attachExpireDate: "",
   removeAttachSeqs: [],
 };
 
@@ -351,6 +510,7 @@ const WorkOrderEditSection: React.FC<{
   onCancel: () => void;
   onSaved: (updated: WorksMyDetail) => void;
 }> = ({ detail, onCancel, onSaved }) => {
+  const { user } = useAuthContext();
   const [form, setForm] = useState<WorksMyUpdateRequest>(EMPTY_UPDATE_FORM);
   const [options, setOptions] = useState<WorksMyCreateOptions | null>(null);
   const [loadingOptions, setLoadingOptions] = useState(true);
@@ -364,13 +524,19 @@ const WorkOrderEditSection: React.FC<{
     setForm({
       changeTitle: detail.changeTitle ?? "",
       changeReason: detail.changeReason ?? "",
+      systemCd: detail.systemCd ?? "",
       serviceType: detail.serviceType ?? "",
       workType: detail.workType ?? "",
       workGubun: detail.workGubun ?? "",
       workLevel: detail.workLevel ?? "",
       workPeriod: detail.workPeriod ?? "",
+      workDuration: detail.workDuration ?? "",
       expectedFinishedDt: detail.expectedFinishedDt ?? "",
       drsImptYn: detail.drsImptYn ?? "",
+      isSecret: detail.isSecret ?? "N",
+      oppbClYn: detail.oppbClYn ?? "Y",
+      userSecretContent: detail.userSecretContent ?? "",
+      attachExpireDate: detail.attachExpireDate ?? "",
       removeAttachSeqs: [],
     });
     setNewFiles([]);
@@ -386,6 +552,16 @@ const WorkOrderEditSection: React.FC<{
 
   const update = (field: keyof WorksMyUpdateRequest, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  // 단위시스템을 선택하면 업무분야/DRS영향여부를 its_system_info 값 기준으로 자동 완성한다.
+  const handleUnitSystemChange = (systemCd: string) => {
+    const opt = options?.unitSystemOptions.find((o) => o.code === systemCd);
+    setForm((prev) => ({
+      ...prev,
+      systemCd,
+      drsImptYn: opt?.drsImptYn ?? "",
+    }));
   };
 
   const handleFileAdd = (files: FileList | null) => {
@@ -407,16 +583,17 @@ const WorkOrderEditSection: React.FC<{
   };
 
   const handleSubmit = async () => {
-    if (!form.changeTitle.trim() || submitting) return;
+    if (!user || !form.changeTitle.trim() || submitting) return;
     setSubmitting(true);
     setError(null);
     try {
       await updateWorkOrder(
         detail.workOrderNo,
+        user.userEmpno,
         { ...form, removeAttachSeqs: Array.from(removedSeqs) },
         newFiles,
       );
-      const updated = await fetchWorkDetail(detail.workOrderNo);
+      const updated = await fetchWorkDetail(detail.workOrderNo, user.userEmpno);
       onSaved(updated);
     } catch (e: any) {
       setError(e.message ?? "작업지시서 수정 중 오류가 발생했습니다.");
@@ -470,11 +647,43 @@ const WorkOrderEditSection: React.FC<{
       </div>
 
       <div className="grid grid-cols-2 gap-3">
+        <div className="flex flex-col gap-1.5">
+          <Label>단위시스템</Label>
+          <Select value={form.systemCd} onValueChange={handleUnitSystemChange}>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="선택하세요" />
+            </SelectTrigger>
+            <SelectContent>
+              {(options?.unitSystemOptions ?? []).map((opt) => (
+                <SelectItem key={opt.code} value={opt.code}>
+                  {opt.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label>업무분야</Label>
+          <Input
+            value={options?.unitSystemOptions.find((o) => o.code === form.systemCd)?.businessField ?? ""}
+            disabled
+            readOnly
+            placeholder="단위시스템을 선택하면 자동으로 채워집니다"
+          />
+        </div>
         {codeSelect("서비스유형", "serviceType", options?.serviceTypeOptions)}
         {codeSelect("작업유형", "workType", options?.workTypeOptions)}
         {codeSelect("작업구분", "workGubun", options?.workGubunOptions)}
         {codeSelect("작업레벨", "workLevel", options?.workLevelOptions)}
-        {codeSelect("DRS영향", "drsImptYn", options?.drsImptOptions)}
+        <div className="flex flex-col gap-1.5">
+          <Label>DRS영향</Label>
+          <Input
+            value={options?.drsImptOptions.find((o) => o.code === form.drsImptYn)?.label ?? ""}
+            disabled
+            readOnly
+            placeholder="단위시스템을 선택하면 자동으로 채워집니다"
+          />
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
@@ -488,7 +697,7 @@ const WorkOrderEditSection: React.FC<{
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label>완료예정일</Label>
+          <Label>처리예정일</Label>
           <Input
             type="date"
             value={form.expectedFinishedDt}
@@ -586,13 +795,78 @@ const WorkOrderEditSection: React.FC<{
         )}
       </div>
 
+      <div className="flex flex-col gap-2 border border-slate-200 rounded-lg p-3">
+        <div className="flex flex-wrap items-start gap-4">
+          <div className="flex items-center gap-2 shrink-0">
+            <Checkbox
+              id="edit-is-secret"
+              checked={form.isSecret === "Y"}
+              onCheckedChange={(checked) =>
+                update("isSecret", checked === true ? "Y" : "N")
+              }
+            />
+            <Label htmlFor="edit-is-secret" className="cursor-pointer whitespace-nowrap">
+              개인정보 포함 여부
+            </Label>
+          </div>
+
+          <div className="flex items-start gap-3 shrink-0">
+            <p className="text-xs text-slate-500 leading-relaxed w-64 shrink-0">
+              <span className="font-medium text-slate-600">개인정보보호법 제2조(정의)</span>
+              <br />
+              "개인정보"란 살아있는 개인을 알아볼 수 있는 정보(성명, 주민번호 등)로서 다른
+              정보와 쉽게 결합하여 개인을 알아볼 수 있는 것도 포함함.
+            </p>
+
+            <RadioGroup
+              value={form.oppbClYn}
+              onValueChange={(v: string) => update("oppbClYn", v)}
+              disabled={form.isSecret !== "Y"}
+              className="flex flex-col gap-1.5 shrink-0"
+            >
+              <div className="flex items-center gap-1.5">
+                <RadioGroupItem value="Y" id="edit-oppb-y" />
+                <Label htmlFor="edit-oppb-y" className="cursor-pointer font-normal whitespace-nowrap">
+                  1. 대외 게시용
+                </Label>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <RadioGroupItem value="N" id="edit-oppb-n" />
+                <Label htmlFor="edit-oppb-n" className="cursor-pointer font-normal whitespace-nowrap">
+                  2. 기타(1번 제외)
+                </Label>
+              </div>
+            </RadioGroup>
+          </div>
+
+          <div className="flex items-center gap-2 flex-1 min-w-48">
+            <Label className="whitespace-nowrap shrink-0">개인정보 포함 항목</Label>
+            <Input
+              value={form.userSecretContent}
+              onChange={(e) => update("userSecretContent", e.target.value)}
+              disabled={form.isSecret !== "Y"}
+              placeholder="예: 성명, 연락처"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <Label className="whitespace-nowrap">파기일</Label>
+          <DatePickerField
+            value={form.attachExpireDate}
+            onChange={(v) => update("attachExpireDate", v)}
+            disabled={form.isSecret !== "Y"}
+          />
+        </div>
+      </div>
+
       <div className="flex items-center gap-2 justify-end">
         <Button variant="outline" onClick={onCancel} disabled={submitting}>
           취소
         </Button>
         <Button
           className="bg-[var(--sidebar-bg)] hover:bg-[var(--sidebar-bg)]/90 text-white"
-          disabled={submitting || loadingOptions || !form.changeTitle.trim()}
+          disabled={submitting || loadingOptions || !form.changeTitle.trim() || !form.systemCd}
           onClick={handleSubmit}
         >
           저장
@@ -671,6 +945,95 @@ const WriterApproverBox: React.FC<{
   );
 };
 
+// yyyyMMddHHmmss -> yyyy-MM-dd HH:mm:ss (결재이력 팝업 표시용, 시분초까지)
+const formatHistoryDateTime = (dt: string | null) => {
+  if (!dt || dt.length < 14) return formatDetailDate(dt);
+  return `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)} ${dt.slice(8, 10)}:${dt.slice(10, 12)}:${dt.slice(12, 14)}`;
+};
+
+// 결재이력을 처리 순서대로(일렬로) 보여주는 팝업 (작업지시서 세부 화면 우측 상단 버튼에서 연다)
+const ApprovalHistoryDialog: React.FC<{
+  open: boolean;
+  history: WorksMyDetail["approvalHistory"] | undefined;
+  onClose: () => void;
+}> = ({ open, history, onClose }) => {
+  const items = history ?? [];
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogTitle className="text-center">결재이력</DialogTitle>
+        <div className="flex flex-col gap-3 py-2 max-h-96 overflow-y-auto">
+          {items.length === 0 && (
+            <p className="text-sm text-slate-400 text-center py-4">결재 이력이 없습니다.</p>
+          )}
+          {items.map((h, idx) => (
+            <div key={idx} className="flex items-start gap-3">
+              <div className="flex flex-col items-center pt-0.5">
+                <span className="flex items-center justify-center w-5 h-5 rounded-full bg-slate-100 text-slate-500 text-[11px] font-semibold">
+                  {idx + 1}
+                </span>
+                {idx < items.length - 1 && (
+                  <span className="w-px flex-1 bg-slate-200 mt-1" />
+                )}
+              </div>
+              <div className="pb-3 flex-1">
+                <div className="text-sm">
+                  <span className="font-medium text-slate-800">{h.name}</span>
+                  <span className="text-slate-400"> · {h.actIdNm}</span>
+                  <span
+                    className={
+                      h.signLabel === "반려"
+                        ? "text-red-500 font-medium ml-1"
+                        : h.signLabel === "결재대기"
+                        ? "text-amber-500 font-medium ml-1"
+                        : "text-emerald-600 font-medium ml-1"
+                    }
+                  >
+                    {h.signLabel}
+                  </span>
+                </div>
+                <div className="text-xs text-slate-400 mt-0.5">
+                  {h.regDt ? formatHistoryDateTime(h.regDt) : "결재 대기 중"}
+                </div>
+                {h.signLabel === "반려" && h.reason && (
+                  <div className="text-xs text-red-500 mt-1 bg-red-50 border border-red-100 rounded px-2 py-1">
+                    반송사유: {h.reason}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            닫기
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+};
+
+// 이 지시서의 원본이 된 요청서 상세를 읽기 전용으로 보여주는 팝업 (작업지시서 세부 화면 좌측 상단 요청번호에서 연다)
+// [2026-07-23] 작업 요청서(MY) 목록의 상세 조회와 동일하게, 요청서 등록 화면(CreateWorkRequestDialog)을
+// mode="view"로 재사용한다 - 여기서는 결재 액션이 없는 참조용 팝업이라 닫기 버튼만 보여준다.
+const SourceRequestDialog: React.FC<{
+  workRequestNo: string | null;
+  onClose: () => void;
+}> = ({ workRequestNo, onClose }) => (
+  <CreateWorkRequestDialog
+    open={!!workRequestNo}
+    mode="view"
+    workRequestNo={workRequestNo}
+    onClose={onClose}
+    renderFooter={() => (
+      <Button variant="outline" onClick={onClose}>
+        닫기
+      </Button>
+    )}
+  />
+);
+
 const WorkDetailModal: React.FC<Props> = ({
   item,
   onClose,
@@ -680,6 +1043,7 @@ const WorkDetailModal: React.FC<Props> = ({
   onTabChange,
   onDiscussionCreated,
   onDiscussionsRead,
+  onDeleted,
 }) => {
   const { user } = useAuthContext();
 
@@ -705,6 +1069,13 @@ const WorkDetailModal: React.FC<Props> = ({
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [editingOrder, setEditingOrder] = useState(false);
+  const [historyDialogOpen, setHistoryDialogOpen] = useState(false);
+  const [sourceRequestDialogOpen, setSourceRequestDialogOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [extendingPeriod, setExtendingPeriod] = useState(false);
+  const [extendPeriodInput, setExtendPeriodInput] = useState("");
+  const [extendSubmitting, setExtendSubmitting] = useState(false);
+  const [extendError, setExtendError] = useState<string | null>(null);
 
   const formatDate = (dt: string) => {
     if (!dt || dt.length < 8) return dt;
@@ -712,17 +1083,51 @@ const WorkDetailModal: React.FC<Props> = ({
     return `${dt.slice(0, 4)}-${dt.slice(4, 6)}-${dt.slice(6, 8)}`;
   };
 
+  // "yyyyMMddHHmmss" 또는 "yyyy-MM-dd..." 형식의 날짜 문자열을 Date로 변환한다.
+  const parseDt = (dt?: string | null): Date | null => {
+    if (!dt) return null;
+    const digits = dt.replace(/[-:T]/g, "").replace(/\..*$/, "");
+    if (digits.length < 8) return null;
+    const date = new Date(
+      Number(digits.slice(0, 4)),
+      Number(digits.slice(4, 6)) - 1,
+      Number(digits.slice(6, 8)),
+      Number(digits.slice(8, 10) || "0"),
+      Number(digits.slice(10, 12) || "0"),
+      Number(digits.slice(12, 14) || "0"),
+    );
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  // 서버(WorkMyServiceImpl.extendWorkPeriod)와 동일하게 기존 처리예정일에
+  // (신규 처리기간 - 기존 처리기간)일만큼 더해 처리예정일 변경 결과를 미리 보여준다.
+  const extendPreviewDt = (() => {
+    if (!extendingPeriod || !detail || extendPeriodInput.trim() === "") return null;
+    const newPeriod = Number(extendPeriodInput);
+    const currentPeriod = Number(detail.workPeriod ?? "0");
+    if (!Number.isFinite(newPeriod) || !Number.isFinite(currentPeriod)) return null;
+    const base = parseDt(detail.expectedFinishedDt) ?? new Date();
+    const next = new Date(base);
+    next.setDate(next.getDate() + (newPeriod - currentPeriod));
+    return next;
+  })();
+
+  const formatDateObj = (d: Date) =>
+    `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
   // 모달이 열릴 때 등록 정보(지시내용/첨부파일/작업결과 등) 상세 로드
   useEffect(() => {
     setEditingOrder(false);
-    if (!item) {
+    setExtendingPeriod(false);
+    setExtendError(null);
+    if (!item || !user) {
       setDetail(null);
       onDetailLoaded?.(null);
       return;
     }
     setLoadingDetail(true);
     setDetailError(null);
-    fetchWorkDetail(item.workOrderNo)
+    fetchWorkDetail(item.workOrderNo, user.userEmpno)
       .then((data) => {
         setDetail(data);
         onDetailLoaded?.(data);
@@ -730,7 +1135,7 @@ const WorkDetailModal: React.FC<Props> = ({
       .catch(() => setDetailError("상세 정보를 불러오지 못했습니다."))
       .finally(() => setLoadingDetail(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [item?.workOrderNo]);
+  }, [item?.workOrderNo, user]);
 
   // 활성 탭이 바뀔 때마다 부모 화면에 알린다 (승인 버튼 활성화 여부 등에 사용)
   useEffect(() => {
@@ -750,11 +1155,13 @@ const WorkDetailModal: React.FC<Props> = ({
         if (data.length > 0) {
           setExpandedIds(new Set([data[0].opnId]));
           // 협의 목록을 실제로 화면에 보여준 시점에, 로그인 사용자 기준으로 일괄 읽음 처리한다.
-          markDiscussionsRead(workOrderNo)
-            .then(() => onDiscussionsRead?.(workOrderNo))
-            .catch(() => {
-              /* 읽음 처리 실패는 화면에 노출하지 않는다 (new! 배지가 계속 뜨는 정도의 부작용만 있음) */
-            });
+          if (user) {
+            markDiscussionsRead(workOrderNo, user.userEmpno)
+              .then(() => onDiscussionsRead?.(workOrderNo))
+              .catch(() => {
+                /* 읽음 처리 실패는 화면에 노출하지 않는다 (new! 배지가 계속 뜨는 정도의 부작용만 있음) */
+              });
+          }
         }
       })
       .catch(() => setDiscError("협의 목록을 불러오지 못했습니다."))
@@ -859,11 +1266,93 @@ const WorkDetailModal: React.FC<Props> = ({
     }));
   };
 
+  const handleDelete = async () => {
+    if (!item || !user || deleting) return;
+    if (!confirm("정말 이 업무지시서를 삭제하시겠습니까? 삭제 후에는 되돌릴 수 없습니다.")) return;
+    setDeleting(true);
+    try {
+      await deleteWorkOrder(item.workOrderNo, user.userEmpno);
+      onDeleted?.(item.workOrderNo);
+    } catch (e) {
+      alert("삭제 중 오류가 발생했습니다. (" + (e instanceof Error ? e.message : "오류") + ")");
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleStartExtendPeriod = () => {
+    setExtendPeriodInput(detail?.workPeriod ?? "");
+    setExtendError(null);
+    setExtendingPeriod(true);
+  };
+
+  const handleSubmitExtendPeriod = async () => {
+    if (!item || !user || extendSubmitting) return;
+    setExtendError(null);
+    setExtendSubmitting(true);
+    try {
+      const updated = await extendWorkPeriod(item.workOrderNo, user.userEmpno, extendPeriodInput.trim());
+      setDetail(updated);
+      onDetailLoaded?.(updated);
+      setExtendingPeriod(false);
+    } catch (e) {
+      setExtendError(e instanceof Error ? e.message : "처리기간 연장 중 오류가 발생했습니다.");
+    } finally {
+      setExtendSubmitting(false);
+    }
+  };
+
   const breadcrumb = item
     ? `${item.workOrderNo} · ${item.department}${item.part ? ` > ${item.part}` : ""}`
     : "";
 
+  // 기본정보 탭 그리드와 PDF 인쇄용 뷰에서 공용으로 쓰는 필드 목록
+  const basicInfoRows = item
+    ? (
+        [
+          // 작업지시서를 처음 등록한 사람(=지시서 작성(104) 단계를 완료한 사람)을 IT담당자로 표시, 이름 앞에 소속을 붙인다
+          {
+            label: "IT담당자",
+            value: (() => {
+              const writerName = findApprovedEntry(detail?.approvalHistory, "지시서 작성")?.name;
+              if (!writerName) return "-";
+              return detail?.regUserDepNm ? `${detail.regUserDepNm} ${writerName}` : writerName;
+            })(),
+          },
+          // 작업 요청서를 기반으로 전환된 지시서인 경우에만 원본 요청서 작성자를 요청자로 표시, 아니면 빈 값
+          {
+            label: "요청자",
+            value: detail?.requesterName
+              ? `${detail.requesterDepNm ?? "-"} ${detail.requesterName} (${detail.requesterSabun ?? "-"}) · ${detail.requesterTel ?? "-"}`
+              : "-",
+          },
+          { label: "번호", value: item.workOrderNo },
+          { label: "부서", value: item.department },
+          item.part ? { label: "파트", value: item.part } : null,
+          item.workType ? { label: "유형", value: item.workType } : null,
+          item.managerName ? { label: "담당자", value: item.managerName } : null,
+          item.status ? { label: "상태", value: item.status } : null,
+          item.approvalStatus ? { label: "결재", value: item.approvalStatus } : null,
+          item.regDt ? { label: "등록일", value: formatDate(item.regDt) } : null,
+          detail?.targetDepNm ? { label: "대상부서", value: detail.targetDepNm } : null,
+          detail?.systemCdLabel ? { label: "단위시스템", value: detail.systemCdLabel } : null,
+          detail?.businessField ? { label: "업무분야", value: detail.businessField } : null,
+          detail?.serviceTypeLabel ? { label: "서비스유형", value: detail.serviceTypeLabel } : null,
+          detail?.workTypeLabel ? { label: "작업유형", value: detail.workTypeLabel } : null,
+          detail?.workGubunLabel ? { label: "작업구분", value: detail.workGubunLabel } : null,
+          detail?.workLevel ? { label: "작업레벨", value: detail.workLevel } : null,
+          detail?.workPeriod ? { label: "처리기간", value: `${detail.workPeriod}일` } : null,
+          { label: "처리예정일", value: formatDate(detail?.expectedFinishedDt || item.dueDt) },
+          detail?.hopeFinishedDt ? { label: "희망완료일", value: formatDate(detail.hopeFinishedDt) } : null,
+          detail?.drsImptLabel ? { label: "DRS영향", value: detail.drsImptLabel } : null,
+        ] as ({ label: string; value: string } | null)[]
+      ).filter(
+        (row): row is { label: string; value: string } => row !== null,
+      )
+    : [];
+
   return (
+    <>
     <Dialog open={!!item} onOpenChange={(open) => !open && onClose()}>
       <DialogContent
         showCloseButton={false}
@@ -889,21 +1378,40 @@ const WorkDetailModal: React.FC<Props> = ({
         </div>
 
         {/* 탭 바 */}
-        <div className="flex border-b border-slate-200 bg-white">
-          {TABS.map(({ key, label, icon: Icon }) => (
+        <div className="flex items-center justify-between border-b border-slate-200 bg-white">
+          <div className="flex">
+            {TABS.map(({ key, label, icon: Icon }) => (
+              <button
+                key={key}
+                onClick={() => setActiveTab(key)}
+                className={`flex items-center gap-1.5 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
+                  activeTab === key
+                    ? "border-[var(--sidebar-bg)] text-[var(--sidebar-bg)]"
+                    : "border-transparent text-slate-500 hover:text-slate-700"
+                }`}
+              >
+                <Icon className="size-4" />
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2 mr-4 shrink-0">
             <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`flex items-center gap-1.5 px-5 py-3 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === key
-                  ? "border-[var(--sidebar-bg)] text-[var(--sidebar-bg)]"
-                  : "border-transparent text-slate-500 hover:text-slate-700"
-              }`}
+              onClick={() => window.print()}
+              disabled={!detail}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 border border-slate-300 hover:border-slate-400 rounded-md px-2.5 py-1.5 shrink-0 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              <Icon className="size-4" />
-              {label}
+              <FileDown className="size-3.5" />
+              PDF로 내보내기
             </button>
-          ))}
+            <button
+              onClick={() => setHistoryDialogOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-700 border border-slate-300 hover:border-slate-400 rounded-md px-2.5 py-1.5 shrink-0 transition-colors"
+            >
+              <HistoryIcon className="size-3.5" />
+              결재이력
+            </button>
+          </div>
         </div>
 
         {/* 콘텐츠 - 탭 전환 시 팝업 크기가 흔들리지 않도록 높이를 고정한다 */}
@@ -911,12 +1419,75 @@ const WorkDetailModal: React.FC<Props> = ({
           {/* 기본 정보 */}
           {activeTab === "기본정보" && item && (
             <div>
-              {detail?.canEdit && !editingOrder && (
-                <div className="flex justify-end mb-3">
-                  <Button size="sm" variant="outline" onClick={() => setEditingOrder(true)}>
-                    <Pencil className="size-3.5" />
-                    작업지시서 수정
-                  </Button>
+              {((detail?.canEdit && !editingOrder) ||
+                (detail?.canDelete && onDeleted) ||
+                (detail?.canExtendPeriod && !extendingPeriod)) && (
+                <div className="flex justify-end gap-2 mb-3">
+                  {detail?.canExtendPeriod && !extendingPeriod && (
+                    <Button size="sm" variant="outline" onClick={handleStartExtendPeriod}>
+                      <CalendarClock className="size-3.5" />
+                      처리기간 연장
+                    </Button>
+                  )}
+                  {detail?.canEdit && !editingOrder && (
+                    <Button size="sm" variant="outline" onClick={() => setEditingOrder(true)}>
+                      <Pencil className="size-3.5" />
+                      작업지시서 수정
+                    </Button>
+                  )}
+                  {detail?.canDelete && onDeleted && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-500 border-red-200 hover:bg-red-50"
+                      disabled={deleting}
+                      onClick={handleDelete}
+                    >
+                      <Trash2 className="size-3.5" />
+                      삭제
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {extendingPeriod && detail && (
+                <div className="flex flex-col gap-2 border border-slate-200 rounded-lg p-3 mb-3 bg-slate-50">
+                  <div className="flex items-end gap-3">
+                    <div className="flex flex-col gap-1">
+                      <Label>처리기간 (일)</Label>
+                      <Input
+                        type="number"
+                        min={1}
+                        className="w-28"
+                        value={extendPeriodInput}
+                        onChange={(e) => setExtendPeriodInput(e.target.value)}
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <Label>처리예정일</Label>
+                      <p className="h-9 flex items-center text-sm font-medium text-slate-700">
+                        {extendPreviewDt ? formatDateObj(extendPreviewDt) : "-"}
+                      </p>
+                    </div>
+                    <p className="text-xs text-slate-500 pb-2">
+                      기존 처리기간({detail.workPeriod ?? "0"}일)보다 늘리면, 처리예정일이 늘어난
+                      일수만큼 자동으로 함께 밀립니다.
+                    </p>
+                  </div>
+                  {extendError && <p className="text-xs text-red-500">{extendError}</p>}
+                  <div className="flex justify-end gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={extendSubmitting}
+                      onClick={() => setExtendingPeriod(false)}
+                    >
+                      취소
+                    </Button>
+                    <Button size="sm" disabled={extendSubmitting} onClick={handleSubmitExtendPeriod}>
+                      저장
+                    </Button>
+                  </div>
                 </div>
               )}
 
@@ -932,54 +1503,89 @@ const WorkDetailModal: React.FC<Props> = ({
                 />
               ) : (
                 <>
+              {detail?.sourceRequestNo && (
+                <div className="flex justify-start mb-3">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setSourceRequestDialogOpen(true)}
+                  >
+                    <FileSearch className="size-3.5" />
+                    요청서 조회
+                  </Button>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-x-8">
-              {(
-                [
-                  { label: "번호", value: item.workOrderNo },
-                  { label: "부서", value: item.department },
-                  item.part ? { label: "파트", value: item.part } : null,
-                  item.workType ? { label: "유형", value: item.workType } : null,
-                  item.managerName
-                    ? { label: "담당자", value: item.managerName }
-                    : null,
-                  item.status ? { label: "상태", value: item.status } : null,
-                  item.approvalStatus
-                    ? { label: "결재", value: item.approvalStatus }
-                    : null,
-                  item.regDt
-                    ? { label: "등록일", value: formatDate(item.regDt) }
-                    : null,
-                  detail?.targetDepNm
-                    ? { label: "대상부서", value: detail.targetDepNm }
-                    : null,
-                  detail?.serviceTypeLabel
-                    ? { label: "서비스유형", value: detail.serviceTypeLabel }
-                    : null,
-                  detail?.workTypeLabel
-                    ? { label: "작업유형", value: detail.workTypeLabel }
-                    : null,
-                  detail?.workGubunLabel
-                    ? { label: "작업구분", value: detail.workGubunLabel }
-                    : null,
-                  detail?.workLevel
-                    ? { label: "작업레벨", value: detail.workLevel }
-                    : null,
-                  detail?.workPeriod
-                    ? { label: "처리기간", value: `${detail.workPeriod}일` }
-                    : null,
-                  { label: "완료예정일", value: formatDate(detail?.expectedFinishedDt || item.dueDt) },
-                  detail?.drsImptLabel
-                    ? { label: "DRS영향", value: detail.drsImptLabel }
-                    : null,
-                ] as ({ label: string; value: string } | null)[]
-              )
-                .filter(Boolean)
-                .map((row) => (
-                  <BasicInfoRow key={row!.label} label={row!.label}>
-                    {row!.value}
-                  </BasicInfoRow>
-                ))}
+              {basicInfoRows.map((row) => (
+                <BasicInfoRow key={row.label} label={row.label}>
+                  {row.value}
+                </BasicInfoRow>
+              ))}
               </div>
+
+              {detail && (
+                <div className="flex flex-col gap-2 border border-slate-200 rounded-lg p-3">
+                  <div className="flex flex-wrap items-start gap-4">
+                    <div className="flex items-center gap-2 shrink-0">
+                      <Checkbox
+                        id="view-is-secret"
+                        checked={detail.isSecret === "Y"}
+                        disabled
+                      />
+                      <Label htmlFor="view-is-secret" className="whitespace-nowrap">
+                        개인정보 포함 여부
+                      </Label>
+                    </div>
+
+                    <div className="flex items-start gap-3 shrink-0">
+                      <p className="text-xs text-slate-500 leading-relaxed w-64 shrink-0">
+                        <span className="font-medium text-slate-600">개인정보보호법 제2조(정의)</span>
+                        <br />
+                        "개인정보"란 살아있는 개인을 알아볼 수 있는 정보(성명, 주민번호 등)로서 다른
+                        정보와 쉽게 결합하여 개인을 알아볼 수 있는 것도 포함함.
+                      </p>
+
+                      <RadioGroup
+                        value={detail.oppbClYn ?? ""}
+                        disabled
+                        className="flex flex-col gap-1.5 shrink-0"
+                      >
+                        <div className="flex items-center gap-1.5">
+                          <RadioGroupItem value="Y" id="view-oppb-y" />
+                          <Label htmlFor="view-oppb-y" className="font-normal whitespace-nowrap">
+                            1. 대외 게시용
+                          </Label>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <RadioGroupItem value="N" id="view-oppb-n" />
+                          <Label htmlFor="view-oppb-n" className="font-normal whitespace-nowrap">
+                            2. 기타(1번 제외)
+                          </Label>
+                        </div>
+                      </RadioGroup>
+                    </div>
+
+                    <div className="flex items-center gap-2 flex-1 min-w-48">
+                      <Label className="whitespace-nowrap shrink-0">개인정보 포함 항목</Label>
+                      <Input
+                        value={detail.userSecretContent ?? ""}
+                        disabled
+                        readOnly
+                        placeholder="예: 성명, 연락처"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Label className="whitespace-nowrap">파기일</Label>
+                    <DatePickerField
+                      value={detail.attachExpireDate ?? ""}
+                      onChange={() => {}}
+                      disabled
+                    />
+                  </div>
+                </div>
+              )}
 
               {loadingDetail && (
                 <div className="text-center py-6 text-sm text-slate-400">
@@ -1369,6 +1975,125 @@ const WorkDetailModal: React.FC<Props> = ({
         )}
       </DialogContent>
     </Dialog>
+    <ApprovalHistoryDialog
+      open={historyDialogOpen}
+      history={detail?.approvalHistory}
+      onClose={() => setHistoryDialogOpen(false)}
+    />
+    <SourceRequestDialog
+      workRequestNo={sourceRequestDialogOpen ? (detail?.sourceRequestNo ?? null) : null}
+      onClose={() => setSourceRequestDialogOpen(false)}
+    />
+    {/* PDF 인쇄 전용 뷰(기본정보만) - 화면에는 숨겨져 있다가 window.print() 호출 시에만 렌더링된다.
+        body 바로 아래로 포탈해서 렌더링한다: Dialog 트리 안에 두면 나머지 화면을 visibility:hidden으로
+        숨겨도 레이아웃 높이는 그대로 남아 인쇄 시 불필요한 빈 페이지가 추가되는 문제가 있었다.
+        body의 다른 자식들을 print 시 display:none으로 완전히 제거(app.css)하면 이 문제가 사라진다. */}
+    {item && detail && typeof document !== "undefined" && createPortal(
+      <div id="print-area" className="hidden print:block p-8 text-black">
+        <h1 className="text-lg font-bold mb-1">{item.title}</h1>
+        <p className="text-xs text-slate-500 mb-4">{breadcrumb}</p>
+
+        <table className="w-full text-sm border-collapse mb-4">
+          <tbody>
+            {basicInfoRows.reduce<{ label: string; value: string }[][]>((pairs, row, idx) => {
+              if (idx % 2 === 0) pairs.push([row]);
+              else pairs[pairs.length - 1].push(row);
+              return pairs;
+            }, []).map((pair, idx) => (
+              <tr key={idx} className="border-b border-slate-200">
+                <th className="text-left font-normal text-slate-500 align-top w-24 py-1.5 pr-3">
+                  {pair[0].label}
+                </th>
+                <td className="text-left align-top py-1.5 pr-6">{pair[0].value}</td>
+                <th className="text-left font-normal text-slate-500 align-top w-24 py-1.5 pr-3">
+                  {pair[1]?.label ?? ""}
+                </th>
+                <td className="text-left align-top py-1.5">{pair[1]?.value ?? ""}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+
+        <div className="text-xs text-slate-700 mb-4">
+          개인정보 포함 여부: {detail.isSecret === "Y" ? "예" : "아니오"}
+          {detail.isSecret === "Y" && (
+            <>
+              {" · "}공개구분: {detail.oppbClYn === "Y" ? "대외 게시용" : "기타"}
+              {" · "}포함 항목: {detail.userSecretContent || "-"}
+              {" · "}파기일: {detail.attachExpireDate || "-"}
+            </>
+          )}
+        </div>
+
+        {detail.changeReason && (
+          <div className="mb-4">
+            <p className="text-xs text-slate-500 mb-1">지시내용</p>
+            <p className="text-sm whitespace-pre-wrap">{detail.changeReason}</p>
+          </div>
+        )}
+
+        {detail.attachments.length > 0 && (
+          <div className="mb-4">
+            <p className="text-xs text-slate-500 mb-1">첨부파일</p>
+            <ul className="text-sm">
+              {detail.attachments.map((att) => (
+                <li key={att.seq}>
+                  {att.realFileName} ({formatBytes(Number(att.fileSize))})
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {detail.workResult && (
+          <div className="mb-4">
+            <p className="text-xs text-slate-500 mb-1">
+              조치사항 - {detail.workResult.workerName}
+              {detail.workResult.regDt && ` · ${formatDetailDate(detail.workResult.regDt)}`}
+            </p>
+            <p className="text-sm whitespace-pre-wrap">{detail.workResult.result}</p>
+            {detail.workResult.attachments.length > 0 && (
+              <ul className="text-sm mt-1">
+                {detail.workResult.attachments.map((att) => (
+                  <li key={att.seq}>
+                    {att.realFileName} ({formatBytes(Number(att.fileSize))})
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-4 mb-4 text-sm">
+          <div>
+            <p className="text-xs text-slate-500 mb-1">작성자</p>
+            {(() => {
+              const w = findApprovedEntry(detail.approvalHistory, "지시서 작성");
+              return (
+                <p>
+                  {w?.name ?? "-"}
+                  {w?.regDt && ` (${formatBoxDateTime(w.regDt)})`}
+                </p>
+              );
+            })()}
+          </div>
+          <div>
+            <p className="text-xs text-slate-500 mb-1">승인자</p>
+            {(() => {
+              const a = findApprovedEntry(detail.approvalHistory, "지시서 승인");
+              return (
+                <p>
+                  {a?.name ?? "-"}
+                  {a?.regDt && ` (${formatBoxDateTime(a.regDt)})`}
+                </p>
+              );
+            })()}
+          </div>
+        </div>
+      </div>,
+      document.body,
+    )}
+    </>
   );
 };
 

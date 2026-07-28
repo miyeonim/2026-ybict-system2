@@ -4,7 +4,8 @@ import type {
   WorksAllStatus,
   WorksAllDepartment,
 } from "./WorksAllDto";
-import { fetchWorksAllList } from "~/hooks/work_all/WorksAllController";
+import { fetchWorksAllList, fetchWorksAllCounts } from "~/hooks/work_all/WorksAllController";
+import type { WorksAllCounts } from "~/hooks/work_all/WorksAllController";
 import {
   Table,
   TableBody,
@@ -34,6 +35,7 @@ import {
 } from "@/components/ui/dialog";
 import { fetchWorkDetail } from "~/hooks/work_my/WorksMyController";
 import type { WorksMyApprovalHistoryItem } from "@routes/works_my/WorksMyDto";
+import { useAuthContext } from "@routes/common/jwt/AuthContext";
 
 // 상태별 뱃지 색상 (app.css의 --status-new/progress/done 토큰 재사용)
 const STATUS_COLOR: Record<WorksAllStatus, string> = {
@@ -57,6 +59,21 @@ const ALL_STATUS = "전체";
 const STATUS_FILTERS: WorksAllStatus[] = ["접수", "처리 중", "협의", "완료"];
 const SEEN_NEGOTIATIONS_STORAGE_KEY = "worksAll_seenNegotiations";
 const PAGE_SIZE = 10;
+
+// 마감일 조회 기본 범위 (당일 기준 ±10일)
+const DUE_DT_DEFAULT_RANGE_DAYS = 10;
+
+const formatDateYmd = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+const getDefaultDueDtRange = () => {
+  const today = new Date();
+  const start = new Date(today);
+  start.setDate(start.getDate() - DUE_DT_DEFAULT_RANGE_DAYS);
+  const end = new Date(today);
+  end.setDate(end.getDate() + DUE_DT_DEFAULT_RANGE_DAYS);
+  return { start: formatDateYmd(start), end: formatDateYmd(end) };
+};
 
 const DotBadge: React.FC<{ label: string; color: string }> = ({
   label,
@@ -106,20 +123,21 @@ const ApprovalHistoryDialog: React.FC<{
   workOrderNo: string | null;
   onClose: () => void;
 }> = ({ workOrderNo, onClose }) => {
+  const { user } = useAuthContext();
   const [history, setHistory] = useState<WorksMyApprovalHistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!workOrderNo) return;
+    if (!workOrderNo || !user) return;
     setHistory([]);
     setError(null);
     setLoading(true);
-    fetchWorkDetail(workOrderNo)
+    fetchWorkDetail(workOrderNo, user.userEmpno)
       .then((detail) => setHistory(detail.approvalHistory ?? []))
       .catch(() => setError("결재이력을 불러오지 못했습니다."))
       .finally(() => setLoading(false));
-  }, [workOrderNo]);
+  }, [workOrderNo, user]);
 
   return (
     <Dialog open={!!workOrderNo} onOpenChange={(v) => !v && onClose()}>
@@ -189,18 +207,33 @@ const ApprovalHistoryDialog: React.FC<{
   );
 };
 
+const EMPTY_COUNTS: WorksAllCounts = {
+  deptCounts: {},
+  partCounts: {},
+  statusCounts: {},
+  totalCount: 0,
+};
+
 const WorksAllMain: React.FC = () => {
-  const [list, setList] = useState<WorksAllListItem[]>([]);
+  const [pageItems, setPageItems] = useState<WorksAllListItem[]>([]);
+  const [totalElements, setTotalElements] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [counts, setCounts] = useState<WorksAllCounts>(EMPTY_COUNTS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedDept, setSelectedDept] = useState<WorksAllDepartment>("영업");
   const [selectedPart, setSelectedPart] = useState<string>(ALL_PART);
   const [selectedStatus, setSelectedStatus] = useState<string>(ALL_STATUS);
-  const [startDueDt, setStartDueDt] = useState<string>("");
-  const [endDueDt, setEndDueDt] = useState<string>("");
+  const [startDueDt, setStartDueDt] = useState<string>(
+    () => getDefaultDueDtRange().start,
+  );
+  const [endDueDt, setEndDueDt] = useState<string>(
+    () => getDefaultDueDtRange().end,
+  );
   const [seenNegotiations, setSeenNegotiations] = useState<Set<string>>(
     new Set(),
   );
+  const [seenLoaded, setSeenLoaded] = useState(false);
   const [detailItem, setDetailItem] = useState<WorksAllListItem | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [historyWorkOrderNo, setHistoryWorkOrderNo] = useState<string | null>(null);
@@ -211,8 +244,16 @@ const WorksAllMain: React.FC = () => {
       if (raw) setSeenNegotiations(new Set(JSON.parse(raw)));
     } catch {
       // localStorage 접근 불가 시 무시
+    } finally {
+      setSeenLoaded(true);
     }
   }, []);
+
+  // 협의 확인 목록은 Set 참조가 매번 바뀌므로, effect 의존성 비교용으로 문자열 키를 따로 둔다
+  const seenKey = useMemo(
+    () => Array.from(seenNegotiations).sort().join(","),
+    [seenNegotiations],
+  );
 
   const markNegotiationSeen = (workOrderNo: string) => {
     setSeenNegotiations((prev) => {
@@ -255,128 +296,91 @@ const WorksAllMain: React.FC = () => {
     setSelectedStatus(ALL_STATUS);
   };
 
-  // 마감일 범위 필터 (시작/종료 중 하나만 입력해도 동작, YYYY-MM-DD -> YYYYMMDD 변환 후 비교)
-  const dueDtFilteredList = useMemo(() => {
-    if (!startDueDt && !endDueDt) return list;
-    const start = startDueDt.replaceAll("-", "");
-    const end = endDueDt.replaceAll("-", "");
-    return list.filter((item) => {
-      if (start && item.dueDt < start) return false;
-      if (end && item.dueDt > end) return false;
-      return true;
-    });
-  }, [list, startDueDt, endDueDt]);
-
   const handleResetDueDt = () => {
-    setStartDueDt("");
-    setEndDueDt("");
+    const defaultRange = getDefaultDueDtRange();
+    setStartDueDt(defaultRange.start);
+    setEndDueDt(defaultRange.end);
   };
 
-  const deptCounts = useMemo(() => {
-    const counts: Record<WorksAllDepartment, number> = {
-      영업: 0,
-      배전: 0,
-      기술: 0,
-    };
-    dueDtFilteredList.forEach((item) => {
-      counts[item.department] += 1;
-    });
-    return counts;
-  }, [dueDtFilteredList]);
+  // 파트 탭 순서 = 카운트 응답이 내려준 순서(파트명 기준 정렬)를 그대로 사용
+  const partOrder = useMemo(() => Object.keys(counts.partCounts), [counts.partCounts]);
 
-  const deptList = useMemo(
-    () =>
-      dueDtFilteredList.filter((item) => item.department === selectedDept),
-    [dueDtFilteredList, selectedDept],
+  const partTotal = useMemo(
+    () => Object.values(counts.partCounts).reduce((sum, n) => sum + n, 0),
+    [counts.partCounts],
   );
 
-  const partCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    deptList.forEach((item) => {
-      counts[item.part] = (counts[item.part] ?? 0) + 1;
-    });
-    return counts;
-  }, [deptList]);
-
-  const partOrder = useMemo(() => {
-    const seen: string[] = [];
-    deptList.forEach((item) => {
-      if (!seen.includes(item.part)) seen.push(item.part);
-    });
-    return seen;
-  }, [deptList]);
-
-  const filteredList = useMemo(
-    () =>
-      selectedPart === ALL_PART
-        ? deptList
-        : deptList.filter((item) => item.part === selectedPart),
-    [deptList, selectedPart],
-  );
-
-  // 협의는 사용자가 아직 확인하지 않은 건만 집계/표시 (확인한 협의는 카운트와 목록에서 제외)
-  const statusCounts = useMemo(() => {
-    const counts: Record<string, number> = {};
-    filteredList.forEach((item) => {
-      if (item.status === "협의" && seenNegotiations.has(item.workOrderNo)) {
-        return;
-      }
-      counts[item.status] = (counts[item.status] ?? 0) + 1;
-    });
-    return counts;
-  }, [filteredList, seenNegotiations]);
-
-  const statusFilteredList = useMemo(() => {
-    if (selectedStatus === ALL_STATUS) return filteredList;
-    if (selectedStatus === "협의") {
-      return filteredList.filter(
-        (item) =>
-          item.status === "협의" && !seenNegotiations.has(item.workOrderNo),
-      );
-    }
-    return filteredList.filter((item) => item.status === selectedStatus);
-  }, [filteredList, selectedStatus, seenNegotiations]);
-
-  const totalPages = Math.max(
-    1,
-    Math.ceil(statusFilteredList.length / PAGE_SIZE),
-  );
-
-  const pagedList = useMemo(
-    () =>
-      statusFilteredList.slice(
-        (currentPage - 1) * PAGE_SIZE,
-        currentPage * PAGE_SIZE,
-      ),
-    [statusFilteredList, currentPage],
-  );
-
-  // 필터 조건이 바뀌면 1페이지로 복귀
+  // 필터 조건이 바뀌면 1페이지로 복귀 (이미 1페이지면 상태 변경이 없어 재조회도 발생하지 않음)
   useEffect(() => {
     setCurrentPage(1);
   }, [selectedDept, selectedPart, selectedStatus, startDueDt, endDueDt]);
 
-  // 필터링 결과가 줄어들어 현재 페이지가 범위를 벗어나면 마지막 페이지로 보정
+  // 조회 결과가 줄어들어 현재 페이지가 범위를 벗어나면 마지막 페이지로 보정
   useEffect(() => {
     if (currentPage > totalPages) setCurrentPage(totalPages);
   }, [currentPage, totalPages]);
 
-  const loadList = async () => {
+  // 목록: 부서/파트/상태/마감일/페이지가 바뀔 때마다 해당 페이지만 서버에 재조회한다
+  useEffect(() => {
+    if (!seenLoaded) return;
+    let cancelled = false;
+
     setLoading(true);
     setError(null);
-    try {
-      const data = await fetchWorksAllList();
-      setList(data);
-    } catch (e: any) {
-      setError(e.message ?? "목록 조회 중 오류가 발생했습니다.");
-    } finally {
-      setLoading(false);
-    }
-  };
+    fetchWorksAllList({
+      dept: selectedDept,
+      part: selectedPart,
+      status: selectedStatus,
+      startDueDt,
+      endDueDt,
+      seenNegotiations: Array.from(seenNegotiations),
+      page: currentPage,
+      size: PAGE_SIZE,
+    })
+      .then((data) => {
+        if (cancelled) return;
+        setPageItems(data.content);
+        setTotalElements(data.totalElements);
+        setTotalPages(Math.max(1, data.totalPages));
+      })
+      .catch((e: any) => {
+        if (cancelled) return;
+        setError(e.message ?? "목록 조회 중 오류가 발생했습니다.");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
 
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDept, selectedPart, selectedStatus, startDueDt, endDueDt, currentPage, seenLoaded, seenKey]);
+
+  // 탭 건수 배지: 목록과 별개로 가벼운 집계 쿼리만 다시 조회한다 (전체 목록을 내려받지 않음)
   useEffect(() => {
-    loadList();
-  }, []);
+    if (!seenLoaded) return;
+    let cancelled = false;
+
+    fetchWorksAllCounts({
+      dept: selectedDept,
+      part: selectedPart,
+      startDueDt,
+      endDueDt,
+      seenNegotiations: Array.from(seenNegotiations),
+    })
+      .then((data) => {
+        if (!cancelled) setCounts(data);
+      })
+      .catch(() => {
+        // 배지 카운트 실패는 목록 표시에 영향 주지 않으므로 조용히 무시
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDept, selectedPart, startDueDt, endDueDt, seenLoaded, seenKey]);
 
   // 현재 페이지 주변 ±2 페이지 + 처음/끝 페이지만 노출, 나머지는 생략(...) 처리
   const getPageNumbers = (page: number, total: number): (number | "ellipsis")[] => {
@@ -410,7 +414,7 @@ const WorksAllMain: React.FC = () => {
       );
     }
 
-    if (statusFilteredList.length === 0) {
+    if (pageItems.length === 0) {
       return (
         <TableRow>
           <TableCell colSpan={8} className="text-center py-10 text-slate-400">
@@ -420,7 +424,7 @@ const WorksAllMain: React.FC = () => {
       );
     }
 
-    return pagedList.map((item) => (
+    return pageItems.map((item) => (
       <TableRow
         key={item.workOrderNo}
         onClick={() => handleRowClick(item)}
@@ -481,7 +485,7 @@ const WorksAllMain: React.FC = () => {
                 : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
           >
-            전체 {filteredList.length}
+            전체 {counts.totalCount}
           </button>
           {STATUS_FILTERS.map((status) => (
             <button
@@ -497,7 +501,7 @@ const WorksAllMain: React.FC = () => {
                 className="w-1.5 h-1.5 rounded-full"
                 style={{ backgroundColor: STATUS_COLOR[status] }}
               />
-              {status} {statusCounts[status] ?? 0}
+              {status} {counts.statusCounts[status] ?? 0}
             </button>
           ))}
         </div>
@@ -526,7 +530,7 @@ const WorksAllMain: React.FC = () => {
                 <Icon className="size-4" />
                 {dept}
                 <CountBadge
-                  count={deptCounts[dept]}
+                  count={counts.deptCounts[dept] ?? 0}
                   active={selectedDept === dept}
                 />
               </TabsTrigger>
@@ -544,7 +548,7 @@ const WorksAllMain: React.FC = () => {
               : "bg-slate-100 text-slate-600 hover:bg-slate-200"
           }`}
         >
-          전체 {deptList.length}
+          전체 {partTotal}
         </button>
         {partOrder.map((part) => (
           <button
@@ -556,7 +560,7 @@ const WorksAllMain: React.FC = () => {
                 : "bg-slate-100 text-slate-600 hover:bg-slate-200"
             }`}
           >
-            {part} {partCounts[part]}
+            {part} {counts.partCounts[part]}
           </button>
         ))}
       </div>
@@ -596,10 +600,10 @@ const WorksAllMain: React.FC = () => {
       </div>
 
       <div className="text-right text-xs text-slate-400 mt-2">
-        총 {statusFilteredList.length}건
+        총 {totalElements}건
       </div>
 
-      {statusFilteredList.length > 0 && (
+      {totalElements > 0 && (
         <Pagination className="mt-4">
           <PaginationContent>
             <PaginationItem>

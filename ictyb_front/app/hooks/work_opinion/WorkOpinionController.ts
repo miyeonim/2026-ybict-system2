@@ -50,8 +50,10 @@ export const addComment = async (
 };
 
 /** 지시번호에 연결된 모든 협의 스레드를 로그인 사용자 기준으로 일괄 읽음 처리 */
-export const markDiscussionsRead = async (instrNo: string): Promise<void> => {
-  await apiClient.post<BaseResponse<void>>(`/api/work_opinion/v1.0/${instrNo}/read`);
+export const markDiscussionsRead = async (instrNo: string, userEmpno: string): Promise<void> => {
+  await apiClient.post<BaseResponse<void>>(`/api/work_opinion/v1.0/${instrNo}/read`, null, {
+    params: { userEmpno },
+  });
 };
 
 /** 댓글 첨부파일을 브라우저를 통해 즉시 다운로드합니다. */

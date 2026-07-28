@@ -19,6 +19,15 @@ body {
   }
 }
 
+/* 작업지시서 상세 PDF 내보내기: #print-area(body 바로 아래로 포탈됨)만 인쇄되도록
+   나머지 body 자식들은 display:none으로 완전히 제거한다. visibility:hidden은 레이아웃
+   공간을 그대로 차지해 불필요한 빈 페이지가 추가되므로 사용하지 않는다. */
+@media print {
+  body > *:not(#print-area) {
+    display: none !important;
+  }
+}
+
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: 'Geist Variable', sans-serif;

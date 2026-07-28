@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useLocation, useNavigate } from "react-router";
+import { useAuthContext } from "@routes/common/jwt/AuthContext";
 import type {
   WorksMyListItem,
   WorksMyStatus,
@@ -8,6 +10,7 @@ import type {
   WorksMyReturnTarget,
   WorksMyCreateOptions,
   WorksMyCreateRequest,
+  WorksMyCreateRequestPrefill,
   WorksMyDetail,
 } from "./WorksMyDto";
 import {
@@ -38,6 +41,9 @@ import {
   DialogTitle,
   DialogFooter,
 } from "@/components/ui/dialog";
+import { Checkbox } from "@/components/ui/checkbox";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { DatePickerField } from "@/components/ui/date-picker-field";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -62,6 +68,11 @@ import {
   X,
   History as HistoryIcon,
 } from "lucide-react";
+
+// [2026-07-23] 요청서 없이 지시서를 바로 등록(104)하는 건 항상 영업배전시스템실 소속 한전 담당자만
+// 할 수 있다(백엔드 WorkMyServiceImpl.SALES_DISTRIBUTION_SYSTEM_SOSOK_HAN과 동일한 값) - 다른 소속으로
+// 시도해도 서버가 거부하지만(진짜 방어선), 버튼 자체를 숨겨 혼란을 줄인다.
+const SALES_DISTRIBUTION_SYSTEM_SOSOK_HAN = "영업배전시스템실";
 
 const STATUS_COLOR: Record<WorksMyStatus, string> = {
   접수: "var(--status-new)",
@@ -171,7 +182,7 @@ const ApprovalHistoryDialog: React.FC<{
 }> = ({ open, history, onClose }) => (
   <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
     <DialogContent className="max-w-md">
-      <DialogTitle>결재이력</DialogTitle>
+      <DialogTitle className="text-center">결재이력</DialogTitle>
       <div className="flex flex-col gap-3 py-2 max-h-96 overflow-y-auto">
         {(history ?? []).map((h, idx) => (
           <div key={idx} className="flex items-start gap-3">
@@ -237,6 +248,7 @@ const ApproveDialog: React.FC<{
   onClose: () => void;
   onConfirmed: (workOrderNo: string) => void;
 }> = ({ open, workOrderNo, onClose, onConfirmed }) => {
+  const { user } = useAuthContext();
   const [candidates, setCandidates] = useState<WorksMyCandidate[]>([]);
   const [selectedSabun, setSelectedSabun] = useState<string>("");
   const [loading, setLoading] = useState(false);
@@ -244,20 +256,20 @@ const ApproveDialog: React.FC<{
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || !workOrderNo) return;
+    if (!open || !workOrderNo || !user) return;
     setSelectedSabun("");
     setError(null);
     setLoading(true);
-    fetchNextCandidates(workOrderNo)
+    fetchNextCandidates(workOrderNo, user.userEmpno)
       .then((res) => setCandidates(res.candidates))
       .catch((e: any) =>
         setError(e.message ?? "다음 단계 담당자 후보 조회에 실패했습니다."),
       )
       .finally(() => setLoading(false));
-  }, [open, workOrderNo]);
+  }, [open, workOrderNo, user]);
 
   const handleConfirm = async () => {
-    if (!workOrderNo) return;
+    if (!workOrderNo || !user) return;
     const isFinalStage = !loading && candidates.length === 0;
     const next = candidates.find((c) => c.sabun === selectedSabun);
     if (!isFinalStage && !next) return;
@@ -265,7 +277,7 @@ const ApproveDialog: React.FC<{
     setSubmitting(true);
     setError(null);
     try {
-      await submitApproval(workOrderNo, next ?? { sabun: "", name: "", roleNm: "" });
+      await submitApproval(workOrderNo, user, next ?? { sabun: "", name: "", roleNm: "" });
       onConfirmed(workOrderNo);
     } catch (e: any) {
       setError(e.message ?? "결재 승인 처리 중 오류가 발생했습니다.");
@@ -347,6 +359,7 @@ const ReturnDialog: React.FC<{
   onClose: () => void;
   onConfirmed: (workOrderNo: string) => void;
 }> = ({ open, workOrderNo, onClose, onConfirmed }) => {
+  const { user } = useAuthContext();
   const [targets, setTargets] = useState<WorksMyReturnTarget[]>([]);
   const [selectedActId, setSelectedActId] = useState<string>("");
   const [reason, setReason] = useState("");
@@ -355,26 +368,26 @@ const ReturnDialog: React.FC<{
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!open || !workOrderNo) return;
+    if (!open || !workOrderNo || !user) return;
     setReason("");
     setSelectedActId("");
     setError(null);
     setLoading(true);
-    fetchReturnTargets(workOrderNo)
+    fetchReturnTargets(workOrderNo, user.userEmpno)
       .then((res) => {
         setTargets(res.targets);
         setSelectedActId(res.targets[0]?.actId ?? "");
       })
       .catch((e: any) => setError(e.message ?? "반송 대상 단계 조회에 실패했습니다."))
       .finally(() => setLoading(false));
-  }, [open, workOrderNo]);
+  }, [open, workOrderNo, user]);
 
   const handleConfirm = async () => {
-    if (!workOrderNo || !reason.trim() || !selectedActId) return;
+    if (!workOrderNo || !user || !reason.trim() || !selectedActId) return;
     setSubmitting(true);
     setError(null);
     try {
-      await submitReturn(workOrderNo, reason.trim(), selectedActId);
+      await submitReturn(workOrderNo, user, reason.trim(), selectedActId);
       onConfirmed(workOrderNo);
     } catch (e: any) {
       setError(e.message ?? "반송 처리 중 오류가 발생했습니다.");
@@ -484,23 +497,34 @@ const EMPTY_CREATE_FORM: WorksMyCreateRequest = {
   workOrderNo: "",
   changeTitle: "",
   changeReason: "",
+  systemCd: "",
   serviceType: "",
   workType: "",
   workGubun: "",
   workLevel: "",
   workPeriod: "",
+  workDuration: "",
   expectedFinishedDt: "",
   drsImptYn: "",
+  isSecret: "N",
+  oppbClYn: "Y",
+  userSecretContent: "",
+  attachExpireDate: "",
   initialApproverSabun: "",
   initialApproverName: "",
+  sourceRequestNo: "",
 };
 
 // 업무지시서 등록: 지시서 작성 + 최초 결재자(한전 파트장) 지정
+// prefill이 있으면 작업 요청서(MY) 상세에서 "작업지시서 작성"으로 넘어온 것이다 - 그 요청서의
+// 103(요청서 접수) 완료 처리가 createWorkOrder(sourceRequestNo=...) 성공 시점에 함께 이뤄진다.
 const CreateWorkOrderDialog: React.FC<{
   open: boolean;
+  prefill?: WorksMyCreateRequestPrefill | null;
   onClose: () => void;
   onCreated: () => void;
-}> = ({ open, onClose, onCreated }) => {
+}> = ({ open, prefill, onClose, onCreated }) => {
+  const { user } = useAuthContext();
   const [form, setForm] = useState<WorksMyCreateRequest>(EMPTY_CREATE_FORM);
   const [options, setOptions] = useState<WorksMyCreateOptions | null>(null);
   const [candidates, setCandidates] = useState<WorksMyCandidate[]>([]);
@@ -512,7 +536,21 @@ const CreateWorkOrderDialog: React.FC<{
 
   useEffect(() => {
     if (!open) return;
-    setForm(EMPTY_CREATE_FORM);
+    setForm({
+      ...EMPTY_CREATE_FORM,
+      ...(prefill
+        ? {
+            sourceRequestNo: prefill.sourceRequestNo,
+            changeTitle: prefill.changeTitle,
+            changeReason: prefill.changeReason,
+            systemCd: prefill.systemCd,
+            serviceType: prefill.serviceType,
+            // 처리예정일(expectedFinishedDt)은 요청서의 희망완료일과 서로 다른 값이므로 채우지 않는다
+            // (일반 등록과 동일하게 기본값 그대로 두고, 처리기간 입력 시에만 계산된다). 희망완료일은
+            // 아래 JSX에서 참고용 별도 항목으로만 보여준다.
+          }
+        : {}),
+    });
     setAttachments([]);
     setError(null);
     setLoading(true);
@@ -524,16 +562,35 @@ const CreateWorkOrderDialog: React.FC<{
       .then(([opts, cands, workOrderNo]) => {
         setOptions(opts);
         setCandidates(cands);
-        setForm((prev) => ({ ...prev, workOrderNo }));
+        setForm((prev) => {
+          const unitSystemOption = prefill?.systemCd
+            ? opts.unitSystemOptions.find((o) => o.code === prefill.systemCd)
+            : undefined;
+          return {
+            ...prev,
+            workOrderNo,
+            ...(unitSystemOption ? { drsImptYn: unitSystemOption.drsImptYn } : {}),
+          };
+        });
       })
       .catch((e: any) =>
         setError(e.message ?? "등록 폼 정보를 불러오지 못했습니다."),
       )
       .finally(() => setLoading(false));
-  }, [open]);
+  }, [open, prefill]);
 
   const update = (field: keyof WorksMyCreateRequest, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  // 단위시스템을 선택하면 업무분야/DRS영향여부를 its_system_info 값 기준으로 자동 완성한다.
+  const handleUnitSystemChange = (systemCd: string) => {
+    const opt = options?.unitSystemOptions.find((o) => o.code === systemCd);
+    setForm((prev) => ({
+      ...prev,
+      systemCd,
+      drsImptYn: opt?.drsImptYn ?? "",
+    }));
   };
 
   const handleFileAdd = (newFiles: FileList | null) => {
@@ -547,11 +604,11 @@ const CreateWorkOrderDialog: React.FC<{
   };
 
   const handleSubmit = async () => {
-    if (!form.changeTitle.trim() || !form.initialApproverSabun) return;
+    if (!user || !form.changeTitle.trim() || !form.initialApproverSabun || !form.systemCd) return;
     setSubmitting(true);
     setError(null);
     try {
-      await createWorkOrder(form, attachments);
+      await createWorkOrder(user, form, attachments);
       onCreated();
     } catch (e: any) {
       setError(e.message ?? "업무지시서 등록 중 오류가 발생했습니다.");
@@ -585,6 +642,9 @@ const CreateWorkOrderDialog: React.FC<{
     </div>
   );
 
+  const selectedUnitSystem = options?.unitSystemOptions.find((o) => o.code === form.systemCd);
+  const drsImptLabel = options?.drsImptOptions.find((o) => o.code === form.drsImptYn)?.label ?? "";
+
   return (
     <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="max-w-6xl sm:max-w-6xl max-h-[95vh] overflow-y-auto">
@@ -592,6 +652,12 @@ const CreateWorkOrderDialog: React.FC<{
           등록번호 {form.workOrderNo || "발급 중..."}
         </div>
         <DialogTitle>작업지시서 등록</DialogTitle>
+
+        {prefill && (
+          <div className="text-xs text-emerald-700 bg-emerald-50 px-3 py-2 rounded-md border border-emerald-200">
+            요청서 {prefill.sourceRequestNo} 내용을 기반으로 자동 작성되었습니다. 필요한 내용을 확인하고 수정하세요.
+          </div>
+        )}
 
         {error && (
           <div className="text-xs text-red-500 bg-red-50 px-3 py-2 rounded-md border border-red-200">
@@ -607,11 +673,43 @@ const CreateWorkOrderDialog: React.FC<{
         ) : (
           <div className="flex flex-col gap-4 py-2">
             <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label>단위시스템</Label>
+                <Select value={form.systemCd} onValueChange={handleUnitSystemChange}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="선택하세요" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(options?.unitSystemOptions ?? []).map((opt) => (
+                      <SelectItem key={opt.code} value={opt.code}>
+                        {opt.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label>업무분야</Label>
+                <Input
+                  value={selectedUnitSystem?.businessField ?? ""}
+                  disabled
+                  readOnly
+                  placeholder="단위시스템을 선택하면 자동으로 채워집니다"
+                />
+              </div>
               {codeSelect("서비스유형", "serviceType", options?.serviceTypeOptions)}
               {codeSelect("작업유형", "workType", options?.workTypeOptions)}
               {codeSelect("작업구분", "workGubun", options?.workGubunOptions)}
               {codeSelect("작업레벨", "workLevel", options?.workLevelOptions)}
-              {codeSelect("DRS영향", "drsImptYn", options?.drsImptOptions)}
+              <div className="flex flex-col gap-1.5">
+                <Label>DRS영향</Label>
+                <Input
+                  value={drsImptLabel}
+                  disabled
+                  readOnly
+                  placeholder="단위시스템을 선택하면 자동으로 채워집니다"
+                />
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -635,7 +733,7 @@ const CreateWorkOrderDialog: React.FC<{
                 />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label>완료예정일</Label>
+                <Label>처리예정일</Label>
                 <Input
                   type="date"
                   value={form.expectedFinishedDt}
@@ -643,6 +741,16 @@ const CreateWorkOrderDialog: React.FC<{
                   max="9999-12-31"
                 />
               </div>
+              {prefill && (
+                <div className="flex flex-col gap-1.5">
+                  <Label>희망완료일 (요청서)</Label>
+                  <Input
+                    value={prefill.hopeFinishedDt || "-"}
+                    disabled
+                    readOnly
+                  />
+                </div>
+              )}
             </div>
 
             <div className="flex flex-col gap-1.5">
@@ -717,6 +825,71 @@ const CreateWorkOrderDialog: React.FC<{
               )}
             </div>
 
+            <div className="flex flex-col gap-2 border border-slate-200 rounded-lg p-3">
+              <div className="flex flex-wrap items-start gap-4">
+                <div className="flex items-center gap-2 shrink-0">
+                  <Checkbox
+                    id="create-is-secret"
+                    checked={form.isSecret === "Y"}
+                    onCheckedChange={(checked) =>
+                      update("isSecret", checked === true ? "Y" : "N")
+                    }
+                  />
+                  <Label htmlFor="create-is-secret" className="cursor-pointer whitespace-nowrap">
+                    개인정보 포함 여부
+                  </Label>
+                </div>
+
+                <div className="flex items-start gap-3 shrink-0">
+                  <p className="text-xs text-slate-500 leading-relaxed w-64 shrink-0">
+                    <span className="font-medium text-slate-600">개인정보보호법 제2조(정의)</span>
+                    <br />
+                    "개인정보"란 살아있는 개인을 알아볼 수 있는 정보(성명, 주민번호 등)로서 다른
+                    정보와 쉽게 결합하여 개인을 알아볼 수 있는 것도 포함함.
+                  </p>
+
+                  <RadioGroup
+                    value={form.oppbClYn}
+                    onValueChange={(v: string) => update("oppbClYn", v)}
+                    disabled={form.isSecret !== "Y"}
+                    className="flex flex-col gap-1.5 shrink-0"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <RadioGroupItem value="Y" id="create-oppb-y" />
+                      <Label htmlFor="create-oppb-y" className="cursor-pointer font-normal whitespace-nowrap">
+                        1. 대외 게시용
+                      </Label>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <RadioGroupItem value="N" id="create-oppb-n" />
+                      <Label htmlFor="create-oppb-n" className="cursor-pointer font-normal whitespace-nowrap">
+                        2. 기타(1번 제외)
+                      </Label>
+                    </div>
+                  </RadioGroup>
+                </div>
+
+                <div className="flex items-center gap-2 flex-1 min-w-48">
+                  <Label className="whitespace-nowrap shrink-0">개인정보 포함 항목</Label>
+                  <Input
+                    value={form.userSecretContent}
+                    onChange={(e) => update("userSecretContent", e.target.value)}
+                    disabled={form.isSecret !== "Y"}
+                    placeholder="예: 성명, 연락처"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <Label className="whitespace-nowrap">파기일</Label>
+                <DatePickerField
+                  value={form.attachExpireDate}
+                  onChange={(v) => update("attachExpireDate", v)}
+                  disabled={form.isSecret !== "Y"}
+                />
+              </div>
+            </div>
+
             <div className="flex flex-col gap-1.5">
               <Label>최초 결재자 (한전 파트장)</Label>
               <div className="flex flex-col gap-1.5 max-h-40 overflow-y-auto">
@@ -759,7 +932,8 @@ const CreateWorkOrderDialog: React.FC<{
               submitting ||
               loading ||
               !form.changeTitle.trim() ||
-              !form.initialApproverSabun
+              !form.initialApproverSabun ||
+              !form.systemCd
             }
             onClick={handleSubmit}
           >
@@ -783,12 +957,18 @@ const WorksMyMain: React.FC = () => {
   const [returnDialogOpen, setReturnDialogOpen] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [historyDialogItem, setHistoryDialogItem] = useState<WorksMyListItem | null>(null);
+  const [requestPrefill, setRequestPrefill] = useState<WorksMyCreateRequestPrefill | null>(null);
+  const location = useLocation();
+  const navigate = useNavigate();
+  const { user } = useAuthContext();
+  const canCreateWorkOrder = user?.depTitle === SALES_DISTRIBUTION_SYSTEM_SOSOK_HAN;
 
   const loadList = async () => {
+    if (!user) return;
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchWorksMyList();
+      const data = await fetchWorksMyList(user.userEmpno);
       setList(data);
     } catch (e: any) {
       setError(e.message ?? "목록 조회 중 오류가 발생했습니다.");
@@ -799,7 +979,20 @@ const WorksMyMain: React.FC = () => {
 
   useEffect(() => {
     loadList();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
+
+  // 작업 요청서(MY) 상세의 "작업지시서 작성"에서 navigate(state)로 넘어온 경우, 등록 다이얼로그를
+  // 그 요청서 내용으로 미리 채워 자동으로 연다. 뒤로가기/새로고침 시 재사용되지 않도록 state는 곧바로 지운다.
+  useEffect(() => {
+    const state = location.state as { prefillFromRequest?: WorksMyCreateRequestPrefill } | null;
+    if (state?.prefillFromRequest) {
+      setRequestPrefill(state.prefillFromRequest);
+      setCreateDialogOpen(true);
+      navigate(location.pathname, { replace: true, state: null });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state]);
 
   const itemsWithTabs = useMemo(
     () => list.map((item) => ({ item, tabs: resolveTabs(item) })),
@@ -917,13 +1110,20 @@ const WorksMyMain: React.FC = () => {
             한전 담당자 · 나와 관련된 작업지시서를 관리합니다.
           </p>
         </div>
-        <Button
-          className="bg-[var(--sidebar-bg)] hover:bg-[var(--sidebar-bg)]/90 text-white"
-          onClick={() => setCreateDialogOpen(true)}
-        >
-          <Plus className="size-4" />
-          업무지시서 등록
-        </Button>
+        <div className="flex gap-2">
+          {canCreateWorkOrder && (
+            <Button
+              className="bg-[var(--sidebar-bg)] hover:bg-[var(--sidebar-bg)]/90 text-white"
+              onClick={() => {
+                setRequestPrefill(null);
+                setCreateDialogOpen(true);
+              }}
+            >
+              <Plus className="size-4" />
+              작업지시서 등록
+            </Button>
+          )}
+        </div>
       </div>
 
       {error && (
@@ -994,7 +1194,7 @@ const WorksMyMain: React.FC = () => {
               <TableHead className="w-[120px] text-center text-[var(--sidebar-bg)] font-bold">
                 마감일
               </TableHead>
-              <TableHead className="w-[220px] text-[var(--sidebar-bg)] font-bold">
+              <TableHead className="w-[220px] text-center text-[var(--sidebar-bg)] font-bold">
                 결재이력
               </TableHead>
             </TableRow>
@@ -1015,6 +1215,7 @@ const WorksMyMain: React.FC = () => {
         onWorkResultSubmitted={handleDecisionConfirmed}
         onDiscussionCreated={loadList}
         onDiscussionsRead={loadList}
+        onDeleted={handleDecisionConfirmed}
         footer={
           detailItem?.approvalStatus === "결재 대기" ? (
             currentDetail?.currentActId === "109" ? (
@@ -1080,9 +1281,14 @@ const WorksMyMain: React.FC = () => {
       />
       <CreateWorkOrderDialog
         open={createDialogOpen}
-        onClose={() => setCreateDialogOpen(false)}
+        prefill={requestPrefill}
+        onClose={() => {
+          setCreateDialogOpen(false);
+          setRequestPrefill(null);
+        }}
         onCreated={() => {
           setCreateDialogOpen(false);
+          setRequestPrefill(null);
           loadList();
         }}
       />

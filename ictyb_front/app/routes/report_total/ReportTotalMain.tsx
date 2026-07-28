@@ -5,11 +5,26 @@ import MonthlyRegistrationChart from "./MonthlyRegistrationChart";
 import RankChart from "./RankChart";
 import AlertPanel from "./AlertPanel";
 import { COLOR } from "./types";
+import { useAuthContext } from "@routes/common/jwt/AuthContext";
 
 // ─── 메인 레이아웃 ────────────────────────────────────────────────
 // 각 차트가 자기 state/API를 직접 관리하므로
 // ReportTotalMain은 레이아웃만 담당합니다.
 export default function ReportTotalMain() {
+  const { user } = useAuthContext();
+  const isAllowed = !!user?.deptHead;
+
+  if (!isAllowed) {
+    return (
+      <div
+        className="min-h-screen flex items-center justify-center"
+        style={{ background: COLOR.pageBg, fontFamily: "'Geist Variable', sans-serif" }}
+      >
+        <p className="text-lg font-medium text-gray-500">접근 권한이 없습니다.</p>
+      </div>
+    );
+  }
+
   return (
     <div
       className="min-h-screen p-4 space-y-2.5 pb-10"
