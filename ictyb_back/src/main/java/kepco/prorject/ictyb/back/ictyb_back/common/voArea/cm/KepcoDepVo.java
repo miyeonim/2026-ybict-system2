@@ -6,11 +6,11 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 /**
- * ictyb_kepco_dep 테이블 엔티티 (한전 조직도)
+ * its_kepco_dep 테이블 엔티티 (한전 조직도)
  * 한전측이 전달한 실제 조직도 테이블의 컬럼 구조를 그대로 반영한다.
  */
 @Entity
-@Table(name = "ictyb_kepco_dep")
+@Table(name = "its_kepco_dep")
 @Getter
 @Setter
 @NoArgsConstructor

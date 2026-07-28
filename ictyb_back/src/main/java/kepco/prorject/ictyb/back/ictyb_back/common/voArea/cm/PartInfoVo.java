@@ -6,7 +6,7 @@ import lombok.Data;
 
 @Data
 @Entity
-@Table(name = "ybict_part_info")
+@Table(name = "ictyb_part_info")
 @IdClass(PartInfoPk.class)
 public class PartInfoVo {
 

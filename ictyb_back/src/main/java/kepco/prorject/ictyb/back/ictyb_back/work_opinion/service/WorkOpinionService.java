@@ -5,7 +5,10 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.IOException;
 import java.net.MalformedURLException;
+import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 public interface WorkOpinionService {
 
@@ -24,4 +27,20 @@ public interface WorkOpinionService {
 
     /** 댓글 첨부파일 다운로드 */
     WorkOpinionDto.DownloadFile downloadAttach(String cmntId, Long seqNo) throws MalformedURLException;
+
+    /** 지시번호에 연결된 모든 협의 스레드를 해당 사용자 기준으로 지금 시각에 읽음 처리한다. */
+    void markRead(String instrNo, String sabun);
+
+    /**
+     * 주어진 지시번호 목록 중, 해당 사용자가 아직 읽지 않은 활동(신규 협의 또는 댓글)이 있는
+     * 지시번호만 추려서 반환한다. 작업지시서(MY) "협의" 탭의 new! 배지 판단에 사용한다.
+     */
+    Set<String> getUnreadInstrNos(List<String> instrNos, String sabun);
+
+    /**
+     * 주어진 지시번호별로 "최종 협의 활동 시각"(그 지시번호에 달린 모든 협의 스레드/댓글 중 가장 최근 등록일시)을
+     * 계산한다. 협의가 하나도 없는 지시번호는 결과 맵에 포함되지 않는다.
+     * 작업지시서(MY) 목록의 협의 최신순 정렬에 사용한다.
+     */
+    Map<String, LocalDateTime> getLastActivityByInstrNo(List<String> instrNos);
 }

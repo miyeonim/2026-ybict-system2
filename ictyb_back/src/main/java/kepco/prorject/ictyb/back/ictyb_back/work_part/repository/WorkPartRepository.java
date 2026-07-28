@@ -46,10 +46,10 @@ public interface WorkPartRepository extends JpaRepository<ItWorkReportVo, ItWork
                    IFNULL(pi.DEP_TITLE, '부서없음') AS dep_title,
                    DATEDIFF(CURDATE(), DATE(STR_TO_DATE(hc.EXPECTED_FINISHED_DT, '%Y%m%d%H%i%s'))) AS overdue_days
             FROM handler_calc hc
-            LEFT JOIN ybict_user_info ui 
+            LEFT JOIN ictyb_user_info ui 
                    ON ui.EMPNO = hc.handler_sabun 
                   AND DATE(STR_TO_DATE(hc.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
-            LEFT JOIN ybict_part_info pi 
+            LEFT JOIN ictyb_part_info pi 
                    ON pi.PART_ID = ui.PART_ID 
                   AND pi.USE_YN = 'Y'
             WHERE 
@@ -112,8 +112,8 @@ public interface WorkPartRepository extends JpaRepository<ItWorkReportVo, ItWork
         final_filtered AS (
             SELECT hc.INST_ID
             FROM handler_calc hc
-            LEFT JOIN ybict_user_info ui ON ui.EMPNO = hc.handler_sabun AND DATE(STR_TO_DATE(hc.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
-            LEFT JOIN ybict_part_info pi ON pi.PART_ID = ui.PART_ID AND pi.USE_YN = 'Y'
+            LEFT JOIN ictyb_user_info ui ON ui.EMPNO = hc.handler_sabun AND DATE(STR_TO_DATE(hc.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
+            LEFT JOIN ictyb_part_info pi ON pi.PART_ID = ui.PART_ID AND pi.USE_YN = 'Y'
             WHERE 
             (
                 (:type = '마이' AND :sabun IS NOT NULL AND
@@ -172,10 +172,10 @@ public interface WorkPartRepository extends JpaRepository<ItWorkReportVo, ItWork
                    IFNULL(pi.DEP_TITLE, '부서없음') AS dep_title,
                    DATEDIFF(DATE(STR_TO_DATE(hc.EXPECTED_FINISHED_DT, '%Y%m%d%H%i%s')), CURDATE()) AS remain_days
             FROM handler_calc hc
-            LEFT JOIN ybict_user_info ui 
+            LEFT JOIN ictyb_user_info ui 
                    ON ui.EMPNO = hc.handler_sabun 
                   AND DATE(STR_TO_DATE(hc.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
-            LEFT JOIN ybict_part_info pi 
+            LEFT JOIN ictyb_part_info pi 
                    ON pi.PART_ID = ui.PART_ID 
                   AND pi.USE_YN = 'Y'
             WHERE 
@@ -241,8 +241,8 @@ public interface WorkPartRepository extends JpaRepository<ItWorkReportVo, ItWork
         final_filtered AS (
             SELECT hc.INST_ID
             FROM handler_calc hc
-            LEFT JOIN ybict_user_info ui ON ui.EMPNO = hc.handler_sabun AND DATE(STR_TO_DATE(hc.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
-            LEFT JOIN ybict_part_info pi ON pi.PART_ID = ui.PART_ID AND pi.USE_YN = 'Y'
+            LEFT JOIN ictyb_user_info ui ON ui.EMPNO = hc.handler_sabun AND DATE(STR_TO_DATE(hc.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
+            LEFT JOIN ictyb_part_info pi ON pi.PART_ID = ui.PART_ID AND pi.USE_YN = 'Y'
             WHERE 
                 (
                     :type = '마이' AND 
@@ -270,7 +270,7 @@ public interface WorkPartRepository extends JpaRepository<ItWorkReportVo, ItWork
 
    
     // [부서/파트별 완료·미완료 집계] //////////////////////////////////////////////
-    // 0단계(접수: 104/105/106/107)는 제외하고, 담당자 사번 -> ybict_user_info -> ybict_part_info 로
+    // 0단계(접수: 104/105/106/107)는 제외하고, 담당자 사번 -> ictyb_user_info -> ictyb_part_info 로
     // 부서/파트를 매칭한 뒤 ACT_ID=800(완료) 여부로 집계한다.
     @Query(value = """
         WITH
@@ -298,10 +298,10 @@ public interface WorkPartRepository extends JpaRepository<ItWorkReportVo, ItWork
         matched AS (
             SELECT hc.INST_ID, hc.ACT_ID, pi.DEP_TITLE AS dep_title, pi.PART_NM AS part_nm
             FROM handler_calc hc
-            JOIN ybict_user_info ui 
+            JOIN ictyb_user_info ui 
                  ON ui.EMPNO = hc.handler_sabun 
                 AND DATE(STR_TO_DATE(hc.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
-            JOIN ybict_part_info pi 
+            JOIN ictyb_part_info pi 
                  ON pi.PART_ID = ui.PART_ID 
                 AND pi.USE_YN = 'Y'
             WHERE pi.DEP_TITLE LIKE '%영업%' OR pi.DEP_TITLE LIKE '%배전%' OR pi.DEP_TITLE LIKE '%기술%'

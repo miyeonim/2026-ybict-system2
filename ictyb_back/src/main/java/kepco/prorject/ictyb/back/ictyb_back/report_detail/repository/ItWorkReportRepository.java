@@ -17,19 +17,22 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
      * 작업지시서 목록 조회
      *
      * [담당자 사번 결정 규칙 - 기존 프로젝트 패턴과 동일]
-     *   1) WORKER_SABUN 존재 + WORK_START_DT가 ybict_user_info의 part_start_dt ~ part_end_dt 범위 내
+     *   1) WORKER_SABUN 존재 + WORK_START_DT가 ictyb_user_info의 part_start_dt ~ part_end_dt 범위 내
      *      → WORKER_SABUN 사용
      *   2) 위 조건 불만족 → its_work_history 에서 동일 INST_ID 기준
      *      SEQ 내림차순, LENGTH(REG_SABUN) = 6 인 첫 번째 행의 REG_SABUN 사용
      *
      * [department 결정]
-     *   담당자 사번 → ybict_user_info.PART_ID → PART_ID 앞 2자리
+     *   담당자 사번 → ictyb_user_info.PART_ID → PART_ID 앞 2자리
      *     YY → 영업 / BJ → 배전 / GS → 기술 / 그 외 → 미분류
      *
      * [status 결정]
      *   ACT_ID = '800'                    → 완료
      *   ACT_ID IN ('104','105','106') → 접수
      *   그 외                              → 미완료
+     *
+     * 조회 구간 [startDt, endDt]와 작업 기간(WORK_START_DT ~ EXPECTED_FINISHED_DT)이
+     * 겹치는(overlap) 작업지시서를 대상으로 한다 (구간 이전에 시작해 구간까지 진행 중인 건 포함).
      *
      * @param startDt 조회 시작일 (yyyyMMdd000000 형식, null 허용)
      * @param endDt   조회 종료일 (yyyyMMdd235959 형식, null 허용)
@@ -61,7 +64,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
                     WHEN r.WORKER_SABUN IS NOT NULL
                      AND r.WORKER_SABUN <> ''
                      AND EXISTS (
-                         SELECT 1 FROM ybict_user_info ui
+                         SELECT 1 FROM ictyb_user_info ui
                          WHERE ui.EMPNO = r.WORKER_SABUN
                            AND DATE(STR_TO_DATE(r.WORK_START_DT, '%Y%m%d%H%i%s'))
                                BETWEEN ui.PART_START_DT AND ui.PART_END_DT
@@ -77,10 +80,10 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
                     )
                 END AS sabun
             FROM its_it_work_report r
-            WHERE (:startDt IS NULL OR r.WORK_START_DT >= :startDt)
-              AND (:endDt   IS NULL OR r.WORK_START_DT   <= :endDt)
+            WHERE (:endDt   IS NULL OR r.WORK_START_DT        <= :endDt)
+              AND (:startDt IS NULL OR r.EXPECTED_FINISHED_DT >= :startDt)
         ),
-        -- [STEP 2] 담당자 사번 → ybict_user_info 매칭 → PART_ID 획득
+        -- [STEP 2] 담당자 사번 → ictyb_user_info 매칭 → PART_ID 획득
         --   날짜 범위 조건 동일하게 적용
         matched AS (
             SELECT
@@ -96,7 +99,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
                     ORDER BY ui.PART_START_DT DESC
                 ) AS rn
             FROM resolved rv
-            LEFT JOIN ybict_user_info ui
+            LEFT JOIN ictyb_user_info ui
                 ON ui.EMPNO = rv.sabun
                AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
         )

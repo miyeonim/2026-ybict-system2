@@ -116,6 +116,33 @@ public class WorkOpinionController {
     }
 
     /**
+     * 협의 읽음 처리 (지시번호 기준, 해당 지시번호의 모든 협의 스레드를 일괄 읽음 처리)
+     * POST /api/work_opinion/v1.0/{instrNo}/read
+     * 프론트가 로그인 사용자 사번(userEmpno)을 쿼리 파라미터로 전달하면 그 사용자 기준으로 읽음 기록을 남긴다.
+     */
+    @PostMapping("/v1.0/{instrNo}/read")
+    public ResponseEntity<BaseResponse<?>> markRead(
+            @PathVariable String instrNo,
+            @RequestParam String userEmpno) {
+
+        try {
+            workOpinionService.markRead(instrNo, userEmpno);
+            return ResponseEntity.ok(BaseResponse.builder()
+                    .status(StatusEnum.SUCCESS)
+                    .resultCode(ResultCodeEnum.SUCCESS)
+                    .resultMsg("협의를 읽음 처리했습니다.")
+                    .build());
+        } catch (Exception e) {
+            log.error("협의 읽음 처리 오류 instrNo={}", instrNo, e);
+            return ResponseEntity.ok(BaseResponse.builder()
+                    .status(StatusEnum.FAIL)
+                    .resultCode(ResultCodeEnum.INTERNAL_SERVER_ERROR)
+                    .resultMsg("협의 읽음 처리 중 오류가 발생했습니다.")
+                    .build());
+        }
+    }
+
+    /**
      * 댓글 첨부파일 다운로드
      * GET /api/work_opinion/v1.0/attach/download?cmntId=&seqNo=
      */

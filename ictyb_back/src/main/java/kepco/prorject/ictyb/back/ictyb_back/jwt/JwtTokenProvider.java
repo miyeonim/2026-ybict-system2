@@ -49,8 +49,12 @@ public class JwtTokenProvider {
         claims.put("parDepId", dto.getParDepId());                          //처명
         claims.put("depTitle", dto.getDepTitle());                          //부서명
         claims.put("kepcoMap", dto.getKepcoMap());                          //본사여부
-        
-        
+        claims.put("kepcoYn", dto.getKepcoYn());                            //한전사람 여부
+        claims.put("deptHead", dto.isDeptHead());                           //처장 여부
+        claims.put("partId", dto.getPartId());                              //소속 파트ID (KDN만)
+        claims.put("partLeader", dto.isPartLeader());                       //파트장 여부 (KDN만)
+        claims.put("bujan", dto.isBujan());                                 //부장 여부 (KDN만)
+
         return Jwts.builder()
                 .setClaims(claims) // 토큰의 주체로 loginId(사원번호) 설정
                 .setIssuedAt(now)
@@ -85,13 +89,22 @@ public class JwtTokenProvider {
     public JwtUserDto getUserInfo(String token) {
         Claims claims = parseClaims(token);
 
+        Boolean deptHead = claims.get("deptHead", Boolean.class);
+        Boolean partLeader = claims.get("partLeader", Boolean.class);
+        Boolean bujan = claims.get("bujan", Boolean.class);
+
         return new JwtUserDto(
             claims.get("depId", String.class),      // 부서ID
             claims.get("parDepId", String.class),   // 처명
             claims.get("depTitle", String.class),   // 부서명
             claims.get("kepcoMap", String.class),   // 본사여부
             claims.getSubject(),                                            // 사번
-            claims.get("empNm", String.class)       // 이름
+            claims.get("empNm", String.class),      // 이름
+            claims.get("kepcoYn", String.class),    // 한전사람 여부
+            deptHead != null && deptHead,           // 처장 여부
+            claims.get("partId", String.class),     // 소속 파트ID (KDN만)
+            partLeader != null && partLeader,       // 파트장 여부 (KDN만)
+            bujan != null && bujan                  // 부장 여부 (KDN만)
       );
 
     }

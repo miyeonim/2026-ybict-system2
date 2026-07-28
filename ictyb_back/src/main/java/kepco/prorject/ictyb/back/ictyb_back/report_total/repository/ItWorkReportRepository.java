@@ -18,18 +18,39 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
      //[년도별 파트별 완료율]///////////////////////////////////////////////////////////////////////////
 @Query(value = """
     WITH
-    -- [STEP 1] 담당자 사번 결정
-    -- 우선순위 1: its_it_work_report.REG_SABUN이 ybict_user_info에 존재하고
-    --             WORK_START_DT가 part_start_dt ~ part_end_dt 범위 안에 있으면 사용
-    -- 우선순위 2: 위 조건 불만족 시 its_work_history에서 최신 6자리 사번 사용
-    latest_handler AS (
+    -- [STEP 1] 연도/단계(ACT_ID) 필터링 + 담당자 사번 결정을 한 CTE로 병합
+    -- (성능) 과거에는 "전체 연도 행에 대해 담당자 계산" → "그 다음 ACT_ID로 필터링" 순서였는데,
+    --   ACT_ID NOT IN ('104'~'107') 조건은 아래 담당자 계산(EXISTS/서브쿼리)과 무관하므로
+    --   WHERE에서 먼저 걸러지고 SELECT의 CASE(담당자 계산)는 살아남은 행에만 수행된다.
+    --   its_it_work_report 풀스캔도 1회로 줄어든다(기존엔 STEP1/STEP2에서 2회 스캔).
+    -- ACT_ID NOT IN ('104','105','106','107') : "108(파트 배정) 단계부터 집계"하기 위한 제외 조건.
+    --   일반 흐름(WORK_TYPE<>02)에서는 104~107이 "아직 KDN 파트/담당자가 배정되지 않은" 구간이라
+    --   통계에서 빼는 게 맞다. (커밋 8437a4d 참고)
+    -- ↳ 단, 자료추출(서비스유형 GUBUN='01' CODE='02' 또는 작업유형 GUBUN='03' CODE='01' 중 하나라도
+    --   해당하면 자료추출로 취급 - 2026-07-20 확인, work_my/service/WorkMyServiceImpl.isDataExtraction() 참고)은
+    --   108(지시서 배부/파트 배정) 단계를 건너뛴다
+    --   (ApprovalFlow.NEXT_DATA_EXTRACTION: 107 → 109, 108 없음. work_my/service/ApprovalFlow.java 참고).
+    --   부서장(KDN 부장)이 107에서 승인하면 WorkMyServiceImpl.approve()가 그 즉시
+    --   WORKER_SABUN에 다음 담당자(예: 김채윤)를 채워 넣지만, its_it_work_report.ACT_ID 자체는
+    --   그 담당자가 109(결과 보고)를 완료하기 전까지 계속 "107"에 머문다.
+    --   즉 자료추출 건은 "담당자 배정" 시점이 108이 아니라 107 처리 중(WORKER_SABUN 세팅) 이므로,
+    --   위 NOT IN 조건만 쓰면 이미 배정되어 대기 중인 자료추출 건이 담당자가 실제로
+    --   109를 완료할 때까지 통계에서 통째로 빠지는 버그가 있었다.
+    --   → (WORK_TYPE='01' 또는 SERVICE_TYPE='02', 둘 다 자료추출) AND ACT_ID='107' 이면서
+    --     WORKER_SABUN이 이미 채워진 경우는 "담당자 배정 완료"로 보고 예외적으로 포함시킨다.
+    -- 담당자 사번 결정 우선순위:
+    --   1) its_it_work_report.WORKER_SABUN이 ictyb_user_info에 존재하고
+    --      WORK_START_DT가 part_start_dt ~ part_end_dt 범위 안에 있으면 사용
+    --   2) 위 조건 불만족 시 its_work_history에서 최신 6자리 사번 사용
+    report_base AS (
         SELECT
             r.INST_ID,
+            r.ACT_ID,
             CASE
                 WHEN r.WORKER_SABUN IS NOT NULL
                 AND r.WORKER_SABUN <> ''
                 AND EXISTS (
-                    SELECT 1 FROM ybict_user_info ui
+                    SELECT 1 FROM ictyb_user_info ui
                     WHERE ui.EMPNO = r.WORKER_SABUN
                         AND DATE(STR_TO_DATE(r.WORK_START_DT, '%Y%m%d%H%i%s'))
                             BETWEEN ui.PART_START_DT AND ui.PART_END_DT
@@ -46,46 +67,26 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
             END AS handler_sabun
         FROM its_it_work_report r
         WHERE LEFT(r.WORK_START_DT, 4) = :year
-    ),
-    -- [STEP 2] 선택한 연도(year)에 해당하는 업무 리포트 필터링
-    -- ACT_ID NOT IN ('104','105','106','107') : "108(파트 배정) 단계부터 집계"하기 위한 제외 조건.
-    --   일반 흐름(WORK_TYPE<>02)에서는 104~107이 "아직 KDN 파트/담당자가 배정되지 않은" 구간이라
-    --   통계에서 빼는 게 맞다. (커밋 8437a4d 참고)
-    -- ↳ 단, 자료추출(WORK_TYPE='02')은 108(지시서 배부/파트 배정) 단계를 건너뛴다
-    --   (ApprovalFlow.NEXT_DATA_EXTRACTION: 107 → 109, 108 없음. work_my/service/ApprovalFlow.java 참고).
-    --   부서장(KDN 부장)이 107에서 승인하면 WorkMyServiceImpl.approve()가 그 즉시
-    --   WORKER_SABUN에 다음 담당자(예: 김채윤)를 채워 넣지만, its_it_work_report.ACT_ID 자체는
-    --   그 담당자가 109(결과 보고)를 완료하기 전까지 계속 "107"에 머문다.
-    --   즉 자료추출 건은 "담당자 배정" 시점이 108이 아니라 107 처리 중(WORKER_SABUN 세팅) 이므로,
-    --   위 NOT IN 조건만 쓰면 이미 배정되어 대기 중인 자료추출 건이 담당자가 실제로
-    --   109를 완료할 때까지 통계에서 통째로 빠지는 버그가 있었다.
-    --   → WORK_TYPE='02' AND ACT_ID='107' 이면서 WORKER_SABUN이 이미 채워진 경우는
-    --     "담당자 배정 완료"로 보고 예외적으로 포함시킨다.
-    report_with_handler AS (
-        SELECT r.INST_ID, r.ACT_ID, r.WORK_START_DT
-        FROM its_it_work_report r
-        INNER JOIN latest_handler lh ON r.INST_ID = lh.INST_ID
-        WHERE LEFT(r.WORK_START_DT, 4) = :year
           AND (
               r.ACT_ID NOT IN ('104','105','106','107')
               OR (
-                  r.WORK_TYPE = '02'
+                  (r.WORK_TYPE = '01' OR r.SERVICE_TYPE = '02')
                   AND r.ACT_ID = '107'
                   AND r.WORKER_SABUN IS NOT NULL
                   AND r.WORKER_SABUN <> ''
               )
           )
     ),
-    -- [STEP 3] 업무별 담당자의 부서(PART_ID)를 매칭하고 최신 파트 우선순위 지정
+    -- [STEP 2] 업무별 담당자의 부서(PART_ID)를 매칭하고 최신 파트 우선순위 지정
+    -- (성능) handler_sabun을 report_base에서 바로 물려받으므로 latest_handler 재조인이 필요 없다.
     report_with_part AS (
-        SELECT rh.INST_ID, rh.ACT_ID, ui.PART_ID,
-               ROW_NUMBER() OVER (PARTITION BY rh.INST_ID ORDER BY ui.PART_START_DT DESC) AS rn
-        FROM report_with_handler rh
-        INNER JOIN latest_handler lh ON rh.INST_ID = lh.INST_ID
-        INNER JOIN ybict_user_info ui ON ui.EMPNO = lh.handler_sabun
+        SELECT rb.INST_ID, rb.ACT_ID, ui.PART_ID,
+               ROW_NUMBER() OVER (PARTITION BY rb.INST_ID ORDER BY ui.PART_START_DT DESC) AS rn
+        FROM report_base rb
+        INNER JOIN ictyb_user_info ui ON ui.EMPNO = rb.handler_sabun
         WHERE ui.PART_ID NOT LIKE '%\\_0000'
     ),
-    -- [STEP 4] 각 파트별로 완료(ACT_ID='800') 건수와 전체 건수 집계
+    -- [STEP 3] 각 파트별로 완료(ACT_ID='800') 건수와 전체 건수 집계
     base AS (
         SELECT PART_ID,
                SUM(CASE WHEN ACT_ID = '800' THEN 1 ELSE 0 END) AS done_cnt,
@@ -94,7 +95,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         WHERE rn = 1
         GROUP BY PART_ID
     )
-    -- [STEP 5] 부서정보(pi)와 집계 데이터(base) 결합 및 정렬 적용
+    -- [STEP 4] 부서정보(pi)와 집계 데이터(base) 결합 및 정렬 적용
     SELECT
         pi.DEP_TITLE, pi.PART_ID, pi.PART_NM,
         IFNULL(b.total_cnt, 0) AS total,
@@ -102,7 +103,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         IFNULL(b.total_cnt, 0) - IFNULL(b.done_cnt, 0) AS pending,
         CASE WHEN IFNULL(b.total_cnt, 0) = 0 THEN 100
              ELSE ROUND(IFNULL(b.done_cnt, 0) * 100.0 / b.total_cnt) END AS pct
-    FROM ybict_part_info pi
+    FROM ictyb_part_info pi
     LEFT JOIN base b ON pi.PART_ID = b.PART_ID
     WHERE pi.USE_YN = 'Y'
       AND pi.PART_ID NOT LIKE '%\\_0000'
@@ -118,33 +119,41 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
     ),
     -- 1. 부서 필터링 (불필요한 중복 조회 방지)
     filtered_parts AS (
-        SELECT PART_ID FROM ybict_part_info 
+        SELECT PART_ID FROM ictyb_part_info 
         WHERE USE_YN = 'Y'
         AND (:depTitle = '전체' OR DEP_TITLE = :depTitle)
     ),
-    -- 2. 실제 데이터 매칭 (history_handler를 분리하는 것이 성능상 유리할 수 있사옵니다)
-    raw_data AS (
-        SELECT 
-            r.WORK_START_DT,
-            LEFT(r.WORK_START_DT, 4) AS y,
-            CAST(SUBSTRING(r.WORK_START_DT, 5, 2) AS UNSIGNED) AS m
+    -- 2. 연도/단계(ACT_ID) 필터링을 조인보다 먼저 수행
+    --    (성능) 기존엔 조인 ON절에서 담당자 CASE(서브쿼리 포함)를 계산한 뒤 WHERE로 걸렀는데,
+    --    그러면 필터로 제외될 행까지 조인/서브쿼리 대상이 된다. year/ACT_ID로 먼저 좁혀서
+    --    조인에 들어가는 행 수 자체를 줄인다.
+    filtered_reports AS (
+        SELECT r.INST_ID, r.WORK_START_DT, r.WORKER_SABUN
         FROM its_it_work_report r
-        INNER JOIN ybict_user_info ui ON ui.EMPNO = CASE 
-            WHEN r.WORKER_SABUN IS NOT NULL AND r.WORKER_SABUN <> '' THEN r.WORKER_SABUN
-            ELSE (SELECT h.REG_SABUN FROM its_work_history h 
-                WHERE h.INST_ID = r.INST_ID AND LENGTH(h.REG_SABUN) = 6 
-                ORDER BY CAST(h.SEQ AS UNSIGNED) DESC LIMIT 1)
-        END
-        AND DATE(STR_TO_DATE(r.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
-        INNER JOIN filtered_parts fp ON ui.PART_ID = fp.PART_ID
         WHERE LEFT(r.WORK_START_DT, 4) IN (:year, :prevYear)
           AND r.ACT_ID NOT IN ('104','105','106','107')
     ),
-    -- 3. 연도/월별 집계
+    -- 3. 실제 데이터 매칭 (history_handler를 분리하는 것이 성능상 유리할 수 있사옵니다)
+    raw_data AS (
+        SELECT
+            fr.WORK_START_DT,
+            LEFT(fr.WORK_START_DT, 4) AS y,
+            CAST(SUBSTRING(fr.WORK_START_DT, 5, 2) AS UNSIGNED) AS m
+        FROM filtered_reports fr
+        INNER JOIN ictyb_user_info ui ON ui.EMPNO = CASE
+            WHEN fr.WORKER_SABUN IS NOT NULL AND fr.WORKER_SABUN <> '' THEN fr.WORKER_SABUN
+            ELSE (SELECT h.REG_SABUN FROM its_work_history h
+                WHERE h.INST_ID = fr.INST_ID AND LENGTH(h.REG_SABUN) = 6
+                ORDER BY CAST(h.SEQ AS UNSIGNED) DESC LIMIT 1)
+        END
+        AND DATE(STR_TO_DATE(fr.WORK_START_DT, '%Y%m%d%H%i%s')) BETWEEN ui.PART_START_DT AND ui.PART_END_DT
+        INNER JOIN filtered_parts fp ON ui.PART_ID = fp.PART_ID
+    ),
+    -- 4. 연도/월별 집계
     stats AS (
         SELECT y, m, COUNT(*) AS cnt FROM raw_data GROUP BY y, m
     )
-    -- 4. 1~12월 기반으로 LEFT JOIN하여 결과 도출
+    -- 5. 1~12월 기반으로 LEFT JOIN하여 결과 도출
     SELECT 
     m.m AS month,
 
@@ -176,7 +185,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
      *
      * 담당자 결정 규칙
      *   1) WORKER_SABUN이 존재하면 해당 사번을 사용,
-     *      단 WORK_START_DT(날짜)가 ybict_user_info.part_start_dt ~ part_end_dt 범위 내여야 한다.
+     *      단 WORK_START_DT(날짜)가 ictyb_user_info.part_start_dt ~ part_end_dt 범위 내여야 한다.
      *   2) WORKER_SABUN이 없으면 its_work_history에서
      *      동일 INST_ID, SEQ 내림차순, REG_SABUN이 6자리인 첫 번째 행을 사용,
      *      마찬가지로 WORK_START_DT 날짜가 part_start_dt ~ part_end_dt 범위 내여야 한다.
@@ -207,14 +216,14 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         WHERE LEFT(r.WORK_START_DT, 4) = :year
           AND r.ACT_ID NOT IN ('104','105','106','107')
     ),
-    -- [STEP 2] 담당자 사번과 ybict_user_info 매칭: 날짜가 파트 기간 안에 있어야 함
+    -- [STEP 2] 담당자 사번과 ictyb_user_info 매칭: 날짜가 파트 기간 안에 있어야 함
     matched AS (
         SELECT
             rv.INST_ID,
             rv.ACT_ID,
             ui.PART_ID
         FROM resolved rv
-        INNER JOIN ybict_user_info ui
+        INNER JOIN ictyb_user_info ui
             ON ui.EMPNO = rv.sabun
            AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
     ),
@@ -226,7 +235,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
             pi.PART_NM,
             pi.DEP_TITLE
         FROM matched m
-        INNER JOIN ybict_part_info pi
+        INNER JOIN ictyb_part_info pi
             ON pi.PART_ID = m.PART_ID
            AND pi.USE_YN = 'Y'
            AND pi.PART_ID NOT IN ('YY_0000', 'BJ_0000', 'GS_0000')
@@ -294,14 +303,14 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
                 rv.INST_ID, rv.REQ_ID, rv.CHANGE_TITLE, rv.EXPECTED_FINISHED_DT, ui.PART_ID, rv.sabun,
                 DATEDIFF(CURDATE(), DATE(STR_TO_DATE(rv.EXPECTED_FINISHED_DT, '%Y%m%d%H%i%s'))) AS overdue_days
             FROM resolved rv
-            INNER JOIN ybict_user_info ui ON ui.EMPNO = rv.sabun 
+            INNER JOIN ictyb_user_info ui ON ui.EMPNO = rv.sabun 
                 AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
         ),
         filtered AS (
             SELECT
                 m.INST_ID, m.REQ_ID, m.CHANGE_TITLE, pi.DEP_TITLE AS dep_title, m.overdue_days
             FROM matched m
-            INNER JOIN ybict_part_info pi ON pi.PART_ID = m.PART_ID 
+            INNER JOIN ictyb_part_info pi ON pi.PART_ID = m.PART_ID 
                 AND pi.USE_YN = 'Y' AND pi.PART_ID NOT IN ('YY_0000', 'BJ_0000', 'GS_0000')
         )
         SELECT 
@@ -323,11 +332,11 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         matched AS (
             SELECT rv.INST_ID, ui.PART_ID
             FROM resolved rv
-            INNER JOIN ybict_user_info ui ON ui.EMPNO = rv.sabun AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
+            INNER JOIN ictyb_user_info ui ON ui.EMPNO = rv.sabun AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
         )
         SELECT COUNT(*)
         FROM matched m
-        INNER JOIN ybict_part_info pi ON pi.PART_ID = m.PART_ID AND pi.USE_YN = 'Y' AND pi.PART_ID NOT IN ('YY_0000', 'BJ_0000', 'GS_0000')
+        INNER JOIN ictyb_part_info pi ON pi.PART_ID = m.PART_ID AND pi.USE_YN = 'Y' AND pi.PART_ID NOT IN ('YY_0000', 'BJ_0000', 'GS_0000')
         """, nativeQuery = true)
     Page<Object[]> getLongUnresolvedAlerts(Pageable pageable);
 
@@ -358,7 +367,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
                 rv.INST_ID, rv.REQ_ID, rv.CHANGE_TITLE, rv.EXPECTED_FINISHED_DT, ui.PART_ID, rv.sabun,
                 DATEDIFF(DATE(STR_TO_DATE(rv.EXPECTED_FINISHED_DT, '%Y%m%d%H%i%s')), CURDATE()) AS remain_days
             FROM resolved rv
-            INNER JOIN ybict_user_info ui ON ui.EMPNO = rv.sabun 
+            INNER JOIN ictyb_user_info ui ON ui.EMPNO = rv.sabun 
                 AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
         ),
         filtered AS (
@@ -370,7 +379,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
                     ELSE CONCAT(m.remain_days, '일 후 마감') 
                 END AS due_label
             FROM matched m
-            INNER JOIN ybict_part_info pi ON pi.PART_ID = m.PART_ID 
+            INNER JOIN ictyb_part_info pi ON pi.PART_ID = m.PART_ID 
                 AND pi.USE_YN = 'Y' AND pi.PART_ID NOT IN ('YY_0000', 'BJ_0000', 'GS_0000')
         )
         -- ✨ 파서가 헷갈리지 않도록 최종 조회를 가장 단순한 형태로 변경
@@ -392,11 +401,11 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         matched AS (
             SELECT rv.INST_ID, ui.PART_ID
             FROM resolved rv
-            INNER JOIN ybict_user_info ui ON ui.EMPNO = rv.sabun AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
+            INNER JOIN ictyb_user_info ui ON ui.EMPNO = rv.sabun AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
         )
         SELECT COUNT(*)
         FROM matched m
-        INNER JOIN ybict_part_info pi ON pi.PART_ID = m.PART_ID AND pi.USE_YN = 'Y' AND pi.PART_ID NOT IN ('YY_0000', 'BJ_0000', 'GS_0000')
+        INNER JOIN ictyb_part_info pi ON pi.PART_ID = m.PART_ID AND pi.USE_YN = 'Y' AND pi.PART_ID NOT IN ('YY_0000', 'BJ_0000', 'GS_0000')
         """, nativeQuery = true)
     Page<Object[]> getDueAlerts(Pageable pageable);
 }

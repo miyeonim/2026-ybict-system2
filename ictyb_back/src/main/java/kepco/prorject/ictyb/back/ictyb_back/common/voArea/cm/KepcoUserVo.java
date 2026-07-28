@@ -4,13 +4,13 @@ import jakarta.persistence.*;
 import lombok.Data;
 
 /**
- * ictyb_kepco_user 테이블 엔티티 (한전 인사정보)
+ * its_kepco_user 테이블 엔티티 (한전 인사정보)
  * 한전측이 전달한 실제 인사정보 테이블의 컬럼 구조를 그대로 반영한다.
  * 한전 사용자는 SSO로 인증되어 별도 비밀번호 컬럼이 없다(추후 한전 망 이관 시 SSO 연동 예정).
  */
 @Data
 @Entity
-@Table(name = "ictyb_kepco_user")
+@Table(name = "its_kepco_user")
 public class KepcoUserVo {
 
     @Id

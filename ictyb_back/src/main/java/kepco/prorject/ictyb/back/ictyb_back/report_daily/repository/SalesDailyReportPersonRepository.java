@@ -13,4 +13,6 @@ public interface SalesDailyReportPersonRepository extends JpaRepository<SalesDai
     List<SalesDailyReportPersonVo> findByReportIdAndPartIdOrderByPersonSeq(Long reportId, String partId);
 
     List<SalesDailyReportPersonVo> findByReportIdIn(List<Long> reportIds);
+
+    void deleteByReportIdAndPartId(Long reportId, String partId);
 }

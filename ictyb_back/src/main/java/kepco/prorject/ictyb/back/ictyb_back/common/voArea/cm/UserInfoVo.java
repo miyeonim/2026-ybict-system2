@@ -6,7 +6,7 @@ import lombok.Data;
 
 @Data
 @Entity
-@Table(name = "ybict_user_info")
+@Table(name = "ictyb_user_info")
 @IdClass(UserInfoPk.class)
 public class UserInfoVo {
 

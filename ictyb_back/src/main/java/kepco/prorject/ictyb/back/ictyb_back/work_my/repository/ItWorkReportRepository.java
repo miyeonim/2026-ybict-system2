@@ -33,6 +33,9 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
     /** 관련자 판단 후 instId 목록으로 일괄 조회 */
     List<ItWorkReportVo> findByInstIdIn(List<String> instIds);
 
+    /** 등록번호 채번 시 중복 여부 확인 */
+    boolean existsByInstId(String instId);
+
     //[업무지시서(MY) 목록 조회]///////////////////////////////////////////////////////////////////////////
     /**
      * 관련자 판단으로 추려진 INST_ID 목록을 대상으로, work_all.repository.WorkAllRepository와 동일한
@@ -45,7 +48,7 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         resolved AS (
             SELECT
                 r.INST_ID, r.CHANGE_TITLE, r.ACT_ID,
-                r.APPROVE3_DT, r.EXPECTED_FINISHED_DT, r.REG_USER_DEP_NM,
+                r.APPROVE3_DT, r.EXPECTED_FINISHED_DT, r.REG_USER_DEP_NM, r.REG_DT,
                 DATE(STR_TO_DATE(r.WORK_START_DT, '%Y%m%d%H%i%s')) AS work_date,
                 CASE
                     WHEN r.WORKER_SABUN IS NOT NULL AND r.WORKER_SABUN <> ''
@@ -72,9 +75,9 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
         matched AS (
             SELECT
                 rv.INST_ID, rv.CHANGE_TITLE, rv.ACT_ID,
-                rv.APPROVE3_DT, rv.EXPECTED_FINISHED_DT, rv.REG_USER_DEP_NM, ui.PART_ID
+                rv.APPROVE3_DT, rv.EXPECTED_FINISHED_DT, rv.REG_USER_DEP_NM, rv.REG_DT, ui.PART_ID
             FROM resolved rv
-            LEFT JOIN ybict_user_info ui
+            LEFT JOIN ictyb_user_info ui
                 ON ui.EMPNO = rv.sabun
                AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
         )
@@ -97,11 +100,11 @@ public interface ItWorkReportRepository extends JpaRepository<ItWorkReportVo, It
             END AS STATUS,
             m.EXPECTED_FINISHED_DT
         FROM matched m
-        LEFT JOIN ybict_part_info pi
+        LEFT JOIN ictyb_part_info pi
             ON pi.PART_ID = m.PART_ID
            AND pi.USE_YN = 'Y'
            AND pi.PART_ID NOT LIKE '%\\_0000'
-        ORDER BY m.EXPECTED_FINISHED_DT
+        ORDER BY CASE WHEN m.ACT_ID = '800' THEN 1 ELSE 0 END, m.REG_DT DESC
         """, nativeQuery = true)
     List<Object[]> getWorksMyListByInstIds(@Param("instIds") List<String> instIds);
 }

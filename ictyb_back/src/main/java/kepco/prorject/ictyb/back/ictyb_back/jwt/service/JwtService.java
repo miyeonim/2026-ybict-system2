@@ -20,4 +20,8 @@ public interface JwtService {
     //새로고침, 재접속시 token을 활용한 개인 정보 가져오기 
     LoginResponse getUserInfoFromToken(String token);
 
+    //리프레쉬 토큰 만료 여부 확인 
+    LoginResponse refreshAccessToken(String refreshToken);
+
+
 }

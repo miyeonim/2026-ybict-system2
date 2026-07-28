@@ -5,13 +5,14 @@ import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.pk.SystemInfoPk;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
+import java.util.Optional;
+
 /**
  * 정보시스템정보 레포지토리
  */
 @Repository("reportTotalSystemInfoRepository")
 public interface SystemInfoRepository extends JpaRepository<SystemInfoVo, SystemInfoPk> {
-    
-    // 필요 시 복합키를 활용한 조회 메서드를 정의할 수 있사옵니다.
-    // 예: 시스템 코드로 조회
-    // SystemInfoVo findBySystemCd(String systemCd);
+
+    // 업무지시서 등록/수정 시 선택한 단위시스템(SYSTEM_CD)으로 업무분야·DRS영향여부를 조회할 때 사용
+    Optional<SystemInfoVo> findBySystemCd(String systemCd);
 }

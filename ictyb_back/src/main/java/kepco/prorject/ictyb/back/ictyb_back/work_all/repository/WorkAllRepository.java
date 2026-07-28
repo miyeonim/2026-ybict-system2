@@ -2,11 +2,20 @@ package kepco.prorject.ictyb.back.ictyb_back.work_all.repository;
 
 import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.ItWorkReportVo;
 import kepco.prorject.ictyb.back.ictyb_back.common.voArea.cm.pk.ItWorkReportPk;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.util.List;
+
+import static kepco.prorject.ictyb.back.ictyb_back.work_all.repository.WorkAllQuerySql.BASE_CTE;
+import static kepco.prorject.ictyb.back.ictyb_back.work_all.repository.WorkAllQuerySql.DEPARTMENT_EXPR;
+import static kepco.prorject.ictyb.back.ictyb_back.work_all.repository.WorkAllQuerySql.DUE_DT_FILTER;
+import static kepco.prorject.ictyb.back.ictyb_back.work_all.repository.WorkAllQuerySql.JOINED;
+import static kepco.prorject.ictyb.back.ictyb_back.work_all.repository.WorkAllQuerySql.STATUS_EXPR;
 
 @Repository("workAllItWorkReportRepository")
 public interface WorkAllRepository extends JpaRepository<ItWorkReportVo, ItWorkReportPk> {
@@ -21,81 +30,128 @@ public interface WorkAllRepository extends JpaRepository<ItWorkReportVo, ItWorkR
      * 신뢰할 수 없으므로 사번 미확정 처리한다 (해당 파트 소속으로 인정하지 않음).
      * 반송 이력이 없으면 its_work_history에서 ACT_ID='109'인 행을 SEQ 내림차순으로 조회해
      * 첫 번째 행의 REG_SABUN(작업결과 보고 등록자 사번) 사용
-     * 3) 위 사번을 ybict_user_info와 매칭 (WORK_START_DT가 PART_START_DT~PART_END_DT 범위 내여야
+     * 3) 위 사번을 ictyb_user_info와 매칭 (WORK_START_DT가 PART_START_DT~PART_END_DT 범위 내여야
      * 함)
-     * 4) 매칭된 PART_ID로 ybict_part_info를 조인하여 부서(DEP_TITLE→영업/배전/기술)/파트(PART_NM) 산출
+     * 4) 매칭된 PART_ID로 ictyb_part_info를 조인하여 부서(DEP_TITLE→영업/배전/기술)/파트(PART_NM) 산출
      * 사번/파트를 끝내 매칭하지 못한 건은 목록에서 제외된다.
      * 담당자명(managerName)은 WORKER_NAME이 비어 있으면(=사번을 history에서 가져온 경우) 매칭된
-     * ybict_user_info.USER_NM으로 대체한다.
+     * ictyb_user_info.USER_NM으로 대체한다.
      * 상태(STATUS)는 ictyb_work_negotiation에 수동 등록된 협의 건을 ACT_ID 기반 진행단계보다 우선한다.
+     *
+     * dept/part/status/마감일 범위로 필터링하고 Pageable로 페이지 단위 조회한다.
+     * status='협의'로 필터링할 때는 seenNegotiations(사용자가 이미 확인한 협의 건)를 제외한다.
      */
-    @Query(value = """
-            WITH
-            resolved AS (
-                SELECT
-                    r.INST_ID, r.CHANGE_TITLE, r.WORK_TYPE, r.ACT_ID, r.WORKER_NAME,
-                    r.APPROVE3_DT, r.REG_DT, r.EXPECTED_FINISHED_DT,
-                    DATE(STR_TO_DATE(r.WORK_START_DT, '%Y%m%d%H%i%s')) AS work_date,
-                    CASE
-                        WHEN r.WORKER_SABUN IS NOT NULL AND r.WORKER_SABUN <> ''
-                            THEN r.WORKER_SABUN
-                        WHEN EXISTS (
-                            SELECT 1 FROM its_work_history h2
-                            WHERE h2.INST_ID = r.INST_ID
-                              AND h2.ACT_ID IN ('104','106','107','108')
-                              AND h2.ACT_SIGN = 'R'
-                        )
-                            THEN NULL
-                        ELSE (
-                            SELECT h.REG_SABUN
-                            FROM its_work_history h
-                            WHERE h.INST_ID = r.INST_ID
-                              AND h.ACT_ID = '109'
-                            ORDER BY CAST(h.SEQ AS UNSIGNED) DESC
-                            LIMIT 1
-                        )
-                    END AS sabun
-                FROM its_it_work_report r
-            ),
-            matched AS (
-                SELECT
-                    rv.INST_ID, rv.CHANGE_TITLE, rv.WORK_TYPE, rv.ACT_ID, rv.WORKER_NAME,
-                    rv.APPROVE3_DT, rv.REG_DT, rv.EXPECTED_FINISHED_DT, ui.PART_ID, ui.USER_NM
-                FROM resolved rv
-                INNER JOIN ybict_user_info ui
-                    ON ui.EMPNO = rv.sabun
-                   AND rv.work_date BETWEEN ui.PART_START_DT AND ui.PART_END_DT
-            )
+    @Query(value = BASE_CTE + """
             SELECT
                 m.INST_ID,
                 m.CHANGE_TITLE,
                 m.WORK_TYPE,
-                CASE
-                    WHEN pi.DEP_TITLE = '영업시스템운영부' THEN '영업'
-                    WHEN pi.DEP_TITLE = '배전시스템운영부' THEN '배전'
-                    WHEN pi.DEP_TITLE = '영배시스템기술부' THEN '기술'
-                    ELSE pi.DEP_TITLE
-                END AS DEPARTMENT,
+            """ + DEPARTMENT_EXPR + """
+                 AS DEPARTMENT,
                 pi.PART_NM,
                 COALESCE(m.WORKER_NAME, m.USER_NM) AS WORKER_NAME,
                 CASE WHEN m.APPROVE3_DT IS NOT NULL AND m.APPROVE3_DT <> '' THEN '결재 완료' ELSE '미요청' END AS APPROVAL_STATUS,
-                CASE
-                    WHEN n.INST_ID IS NOT NULL THEN '협의'
-                    WHEN m.ACT_ID = '107' THEN '접수'
-                    WHEN m.ACT_ID = '800' THEN '완료'
-                    ELSE '처리 중'
-                END AS STATUS,
+            """ + STATUS_EXPR + """
+                 AS STATUS,
                 m.REG_DT,
                 m.EXPECTED_FINISHED_DT
-            FROM matched m
-            INNER JOIN ybict_part_info pi
-                ON pi.PART_ID = m.PART_ID
-               AND pi.USE_YN = 'Y'
-               AND pi.PART_ID NOT LIKE '%\\_0000'
-            LEFT JOIN ictyb_work_negotiation n
-                ON n.INST_ID = m.INST_ID
-               AND n.NEGOTIATION_YN = 'Y'
+            """ + JOINED + """
+            WHERE
+            """ + DEPARTMENT_EXPR + """
+                 = :dept
+              AND (:part = '전체' OR pi.PART_NM = :part)
+              AND (:status = '전체' OR
+            """ + STATUS_EXPR + """
+                   = :status)
+              AND (:status <> '협의' OR m.INST_ID NOT IN (:seenNegotiations))
+            """ + DUE_DT_FILTER + """
             ORDER BY m.REG_DT DESC
-            """, nativeQuery = true)
-    List<Object[]> getWorksAllList();
+            """,
+            countQuery = BASE_CTE + """
+            SELECT COUNT(*)
+            """ + JOINED + """
+            WHERE
+            """ + DEPARTMENT_EXPR + """
+                 = :dept
+              AND (:part = '전체' OR pi.PART_NM = :part)
+              AND (:status = '전체' OR
+            """ + STATUS_EXPR + """
+                   = :status)
+              AND (:status <> '협의' OR m.INST_ID NOT IN (:seenNegotiations))
+            """ + DUE_DT_FILTER,
+            nativeQuery = true)
+    Page<Object[]> getWorksAllList(
+            @Param("dept") String dept,
+            @Param("part") String part,
+            @Param("status") String status,
+            @Param("startDueDt") String startDueDt,
+            @Param("endDueDt") String endDueDt,
+            @Param("seenNegotiations") List<String> seenNegotiations,
+            Pageable pageable);
+
+    // [부서별 건수] (마감일 범위 내, 부서/파트/상태 필터 없음) /////////////////////////////////
+    @Query(value = BASE_CTE + """
+            SELECT
+            """ + DEPARTMENT_EXPR + """
+                 AS DEPARTMENT,
+                COUNT(*) AS CNT
+            """ + JOINED + """
+            WHERE 1 = 1
+            """ + DUE_DT_FILTER + """
+            GROUP BY
+            """ + DEPARTMENT_EXPR,
+            nativeQuery = true)
+    List<Object[]> getDeptCounts(
+            @Param("startDueDt") String startDueDt,
+            @Param("endDueDt") String endDueDt);
+
+    // [선택 부서의 파트별 건수] (마감일 범위 내, 파트/상태 필터 없음) ///////////////////////////
+    @Query(value = BASE_CTE + """
+            SELECT
+                pi.PART_NM,
+                COUNT(*) AS CNT
+            """ + JOINED + """
+            WHERE
+            """ + DEPARTMENT_EXPR + """
+                 = :dept
+            """ + DUE_DT_FILTER + """
+            GROUP BY pi.PART_NM
+            ORDER BY pi.PART_NM
+            """,
+            nativeQuery = true)
+    List<Object[]> getPartCounts(
+            @Param("dept") String dept,
+            @Param("startDueDt") String startDueDt,
+            @Param("endDueDt") String endDueDt);
+
+    // [선택 부서+파트의 상태별 건수 + 전체 건수] (단일 행 반환) //////////////////////////////
+    // 협의 건수만 seenNegotiations(사용자가 이미 확인한 협의 건)를 제외하고 집계한다.
+    @Query(value = BASE_CTE + """
+            SELECT
+                SUM(CASE WHEN
+            """ + STATUS_EXPR + """
+                     = '접수' THEN 1 ELSE 0 END) AS CNT_RECEIVED,
+                SUM(CASE WHEN
+            """ + STATUS_EXPR + """
+                     = '처리 중' THEN 1 ELSE 0 END) AS CNT_PROGRESS,
+                SUM(CASE WHEN
+            """ + STATUS_EXPR + """
+                     = '협의' AND m.INST_ID NOT IN (:seenNegotiations) THEN 1 ELSE 0 END) AS CNT_NEGOTIATION,
+                SUM(CASE WHEN
+            """ + STATUS_EXPR + """
+                     = '완료' THEN 1 ELSE 0 END) AS CNT_DONE,
+                COUNT(*) AS CNT_TOTAL
+            """ + JOINED + """
+            WHERE
+            """ + DEPARTMENT_EXPR + """
+                 = :dept
+              AND (:part = '전체' OR pi.PART_NM = :part)
+            """ + DUE_DT_FILTER,
+            nativeQuery = true)
+    List<Object[]> getStatusCounts(
+            @Param("dept") String dept,
+            @Param("part") String part,
+            @Param("startDueDt") String startDueDt,
+            @Param("endDueDt") String endDueDt,
+            @Param("seenNegotiations") List<String> seenNegotiations);
 }

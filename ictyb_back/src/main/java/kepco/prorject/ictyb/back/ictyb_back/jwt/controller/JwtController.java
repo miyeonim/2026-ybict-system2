@@ -48,7 +48,9 @@ public class JwtController {
             return ResponseEntity.ok(new LoginResponse(false, null, null, "SSO 정보 없음", null));
         }
 
-        Optional<KepcoUserVo> kepco_user = kepcoUserRepository.findBySabun(userEmpno);
+        // its_kepco_user는 [2026-07-23] 전부 10자리 사번으로 통일됨 - SSO에서 오는 8자리 userEmpno와
+        // 정확매칭(findBySabun)하면 항상 못 찾으므로 끝자리 매칭(findFirstBySabunEndingWith)을 쓴다.
+        Optional<KepcoUserVo> kepco_user = kepcoUserRepository.findFirstBySabunEndingWith(userEmpno);
         System.out.println("kepco_user2 :::" + kepco_user.toString());
         if (kepco_user == null) {
             System.out.println("SSO 사번 확인됨 그러나 한전 사용자 아님 :: {"+userEmpno+"}");
@@ -73,8 +75,9 @@ public class JwtController {
             // 2. 쿠키 생성
             Cookie cookie = new Cookie("accessToken", result.getAccessToken());
             cookie.setHttpOnly(true); // 자바스크립트에서 접근 불가 (보안)
+            cookie.setSecure(true);     //https token 
             cookie.setPath("/");
-            cookie.setMaxAge(60 * 30); // 30분
+            cookie.setMaxAge(60 * 60);  // 1시간
             response.addCookie(cookie); // 3. 응답에 쿠키 추가
         }
     
@@ -115,7 +118,7 @@ public class JwtController {
     @Operation(summary = "로그아웃", description = "로그아웃 처리 후 쿠키를 만료시킵니다.")
     @PostMapping("/v1.0/logout")
     public ResponseEntity<?> logout(HttpServletResponse response) {
-        ResponseCookie tokenCookie = ResponseCookie.from("token", "")
+        ResponseCookie tokenCookie = ResponseCookie.from("accessToken", "")
                 .httpOnly(true)
                 .path("/")
                 .maxAge(0)
@@ -124,6 +127,35 @@ public class JwtController {
         response.addHeader(HttpHeaders.SET_COOKIE, tokenCookie.toString());
 
         return ResponseEntity.ok(Map.of("success", true, "message", "로그아웃되었습니다."));
+    }
+
+
+    @Operation(summary = "토큰 재발급", description = "refresh token으로 access token을 재발급합니다.")
+    @PostMapping("/v1.0/refresh")
+    public ResponseEntity<LoginResponse> refresh(
+            @RequestBody Map<String, String> body,
+            HttpServletResponse response) {
+
+        String refreshToken = body.get("refreshToken");
+        if (refreshToken == null || refreshToken.isBlank()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                    .body(new LoginResponse(false, null, null, "refresh token이 없습니다.", null));
+        }
+
+        LoginResponse result = jwtService.refreshAccessToken(refreshToken);
+
+        if (!result.isSuccess()) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(result);
+        }
+
+        // 새 access token을 쿠키로 심기
+        Cookie cookie = new Cookie("accessToken", result.getAccessToken());
+        cookie.setHttpOnly(true);
+        cookie.setPath("/");
+        cookie.setMaxAge(60 * 60); // access token 실제 만료시간(1시간)과 일치시킴
+        response.addCookie(cookie);
+
+        return ResponseEntity.ok(result);
     }
 
 }
