@@ -13,7 +13,7 @@ spring:
 
 # @Value("${cors.allowed-origins}") 자바 코드가 완벽하게 인식
 cors:
-  allowed-origins: "http://100.1.221.29:8080,http://localhost:5173"
+  allowed-origins: "http://100.1.221.29:8081,http://localhost:5173"
 
 # 🌟 파일 업로드 경로 설정 (spring 블록 외부)
 file:

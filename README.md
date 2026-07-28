@@ -197,8 +197,12 @@ npm install --cache ./offline-cache
 # 3) Windows(win32/x64)용 바이너리 강제로 캐시에 추가
 npm install --cache ./offline-cache --os=win32 --cpu=x64 --force
 
+# 3) 설치확인 명령어
+npm cache ls --cache=./offline-cache 2>&1 | grep -i win32  
+
 # 4) Linux(x64)용도 미리 추가 (운영 서버 대비)
 npm install --cache ./offline-cache --os=linux --cpu=x64 --force
+npm install --cache=./offline-cache --os=linux --cpu=x64 --libc=glibc
 
 #5) 설치 되어 있는게 어떤건지 확인하는 방법 
 ls node_modules/@rollup  

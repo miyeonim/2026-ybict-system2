@@ -8,7 +8,7 @@ export default defineConfig(({ command }) => ({
     tsconfigPaths: true,
   },
   server: {
-    port: 8080,
+    port: 8081,
     host: "0.0.0.0",   // 외부 IP(100.1.221.29)에서 접속하려면 필수
   },
   ssr: {
