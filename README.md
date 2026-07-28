@@ -288,7 +288,7 @@ https://code.visualstudio.com/docs/?dv=w%EE%80%80in
 
 ```bash
 # 백단
-rsync -av --dry-run \
+rsync -av \
   --exclude 'application*.yml' \
   --exclude 'application*.properties' \
   --exclude 'target/' \
